@@ -790,6 +790,26 @@ class ColdVaultMainWindow(QMainWindow):
         else:
             webbrowser.open("https://etherscan.io")
 
+    # ─── Копирование адреса ─── #
+
+    def _copy_address(self, event=None):
+        """Копирует адрес кошелька в буфер обмена."""
+        if self._address:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(self._address)
+            self._address_label.setText(
+                self._address[:10] + "…" + self._address[-8:] + "  ✓ Скопировано"
+            )
+            QTimer.singleShot(2000, self._restore_address_label)
+        else:
+            QMessageBox.information(self, "Нет адреса", "Кошелёк не разблокирован.")
+
+    def _restore_address_label(self):
+        """Восстанавливает текст адреса после копирования."""
+        if self._address:
+            short = self._address[:10] + "…" + self._address[-8:]
+            self._address_label.setText(short)
+
     # ─── Инфо-карточки ─── #
 
     def _make_info_card(self, title: str, value: str) -> QFrame:
@@ -1373,31 +1393,159 @@ class ColdVaultMainWindow(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        net_card = QFrame()
-        net_card.setObjectName("card")
-        net_layout = QVBoxLayout(net_card)
+        layout.addStretch()
+        return page
 
-        net_layout.addWidget(self._make_field_label("Сеть Ethereum"))
-        self._network_combo = QComboBox()
-        self._network_combo.addItems(["Ethereum Mainnet", "Sepolia Testnet"])
-        self._network_combo.currentIndexChanged.connect(self._change_network)
-        net_layout.addWidget(self._network_combo)
+    # ─── Вспомогательные методы ─── #
 
-        net_layout.addWidget(self._make_field_label("Custom RPC URL (опционально)"))
-        self._rpc_input = QLineEdit()
-        self._rpc_input.setPlaceholderText("https://...")
-        net_layout.addWidget(self._rpc_input)
+    def _make_field_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 600;"
+        )
+        return lbl
 
-        btn_apply_rpc = QPushButton("Применить")
-        btn_apply_rpc.setObjectName("primaryBtn")
-        btn_apply_rpc.clicked.connect(self._apply_custom_rpc)
-        net_layout.addWidget(btn_apply_rpc)
-        layout.addWidget(net_card)
+    def _switch_page(self, idx: int):
+        self._stack.setCurrentIndex(idx)
+        for i, btn in enumerate(self._nav_buttons):
+            btn.setChecked(i == idx)
 
-        usb_card = QFrame()
-        usb_card.setObjectName("card")
-        usb_layout = QVBoxLayout(usb_card)
+    def _detect_usb(self):
+        try:
+            drives = self._usb.detect_usb_drives()
+            if drives:
+                self._usb_connected = True
+                drive = drives[0]
+                self._usb_status.setText(f"● USB: {drive}")
+                self._usb_status.setStyleSheet(
+                    f"color: {COLORS['success']}; font-size: 12px; padding: 4px 8px 16px;"
+                )
+                if self._usb_display:
+                    self._usb_display.setText("Подкл.")
+                self._load_wallet_from_usb(drive)
+            else:
+                self._usb_connected = False
+                self._usb_status.setText("● USB отключён")
+                self._usb_status.setStyleSheet(
+                    f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;"
+                )
+        except Exception as e:
+            pass
 
-        usb_layout.addWidget(self._make_field_label("USB путь (вручную)"))
-        self._manual_usb_input = QLineEdit()
-        self._manual_usb_input.setPlaceholderText("D:\\ или /media/usb")
+    def _load_wallet_from_usb(self, drive: str):
+        try:
+            address = self._km.load_address_from_usb(drive)
+            if address:
+                self._address = address
+                short = address[:10] + "…" + address[-8:]
+                self._address_label.setText(short)
+                self._btn_refresh.setEnabled(True)
+                self._btn_create_tx.setEnabled(True)
+                self._refresh_balance()
+                self._load_tx_history()
+        except Exception:
+            pass
+
+    def _refresh_balance(self):
+        if not self._address:
+            return
+        if not self._eth.is_connected:
+            self._eth.connect()
+        self._balance_worker.fetch_balance(self._address)
+        self._balance_worker.balance_ready.connect(self._on_balance_ready)
+        self._nonce_worker.fetch_nonce(self._address)
+        self._nonce_worker.nonce_ready.connect(self._on_nonce_ready)
+
+    def _on_balance_ready(self, data: dict):
+        eth_val = data.get("eth", "0")
+        self._balance_eth = str(eth_val)
+        self._update_balance_display()
+
+    def _on_nonce_ready(self, nonce: int):
+        self._current_nonce = nonce
+        if self._nonce_display:
+            self._nonce_display.setText(str(nonce))
+
+    def _fetch_gas_prices(self):
+        if not self._eth.is_connected:
+            self._eth.connect()
+        self._gas_worker.fetch_gas()
+        self._gas_worker.gas_ready.connect(self._on_gas_ready)
+
+    def _on_gas_ready(self, data: dict):
+        base = data.get("base_fee_gwei", data.get("gas_price_gwei", 0))
+        if self._gas_display:
+            self._gas_display.setText(f"{base:.1f} Gwei")
+        if hasattr(self, "_max_fee_input"):
+            self._max_fee_input.setValue(float(base) * 1.2)
+
+    def _on_tx_type_changed(self, idx: int):
+        if idx == 0:
+            self._eip1559_widget.show()
+            self._legacy_widget.hide()
+        else:
+            self._eip1559_widget.hide()
+            self._legacy_widget.show()
+
+    def _create_unsigned_tx(self):
+        if not self._address or not self._usb_connected:
+            QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован или USB не подключён.")
+            return
+        to = self._to_input.text().strip()
+        if not to.startswith("0x") or len(to) != 42:
+            QMessageBox.warning(self, "Ошибка", "Неверный адрес получателя")
+            return
+        amount = self._amount_input.value()
+        if amount <= 0:
+            QMessageBox.warning(self, "Ошибка", "Укажите сумму > 0")
+            return
+        try:
+            use_eip1559 = self._tx_type_combo.currentIndex() == 0
+            tx_req = TransactionRequest(
+                to=to,
+                value_eth=amount,
+                nonce=self._current_nonce,
+                gas_limit=int(self._gas_limit_input.value()),
+                max_fee_gwei=self._max_fee_input.value() if use_eip1559 else None,
+                priority_fee_gwei=self._priority_fee_input.value() if use_eip1559 else None,
+                gas_price_gwei=self._gas_price_input.value() if not use_eip1559 else None,
+                chain_id=self._eth.chain_id or 1,
+            )
+            tx_json = TransactionSigner.serialize_unsigned_tx(tx_req)
+            fname = f"tx_{int(time.time())}.json"
+            path = self._usb.save_pending_tx(tx_json, fname)
+            QMessageBox.information(
+                self, "Транзакция создана",
+                f"Сохранено в pending/:\n{path}\n\n"
+                f"Перейдите на вкладку 'Подписать & Отправить'."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _connect_signals(self):
+        self._balance_worker.error.connect(
+            lambda e: self._balance_label.setText(f"Ошибка: {e[:40]}")
+        )
+        self._tx_worker.tx_sent.connect(self._on_tx_sent)
+        self._tx_worker.error.connect(
+            lambda e: self._broadcast_log.append(f"[!] {e}") if hasattr(self, '_broadcast_log') else None
+        )
+
+    def _on_tx_sent(self, tx_hash: str):
+        if hasattr(self, '_broadcast_log'):
+            self._broadcast_log.append(f"[✓] TX отправлена: {tx_hash}")
+        QMessageBox.information(
+            self, "Транзакция отправлена",
+            f"Hash: {tx_hash}\n\nПроверьте на Etherscan."
+        )
+
+
+def _pil_to_pixmap(pil_image) -> QPixmap:
+    """Конвертирует PIL Image в QPixmap."""
+    import io
+    buf = io.BytesIO()
+    pil_image.save(buf, format="PNG")
+    buf.seek(0)
+    qimg = QImage()
+    qimg.loadFromData(buf.read())
+    return QPixmap.fromImage(qimg)
