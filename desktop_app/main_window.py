@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QPushButton, QLabel, QLineEdit, QFrame, QMessageBox, QFileDialog,
     QComboBox, QDoubleSpinBox, QTextEdit, QSpacerItem, QSizePolicy,
-    QApplication, QProgressBar, QGroupBox, QGridLayout, QScrollArea
+    QApplication, QProgressBar, QGroupBox, QGridLayout, QScrollArea,
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QFont, QIcon, QClipboard, QPixmap, QImage
@@ -36,7 +37,6 @@ from desktop_app.styles import (
 # ─── Фоновые потоки ─── #
 
 class NetworkWorker(QThread):
-    """универсальный поток для сетевых запросов."""
     balance_ready = pyqtSignal(dict)
     gas_ready = pyqtSignal(dict)
     nonce_ready = pyqtSignal(int)
@@ -102,7 +102,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._km = KeyManager()
         self._usb = USBManager()
         self._eth = EthNetwork("mainnet")
-        # Отдельные воркеры — не перетирают задачу друг друга
         self._balance_worker = NetworkWorker(self._eth)
         self._nonce_worker = NetworkWorker(self._eth)
         self._gas_worker = NetworkWorker(self._eth)
@@ -117,8 +116,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._connect_signals()
 
         QTimer.singleShot(500, self._detect_usb)
-
-    # ─── UI ─── #
 
     def _build_ui(self):
         central = QWidget()
@@ -163,7 +160,7 @@ class ColdVaultMainWindow(QMainWindow):
             ("⌂  Кошелёк", 0),
             ("↗  Отправить", 1),
             ("▤  Получить (QR)", 2),
-            ("✎  Подписать", 3),
+            ("✎  Подписать & Отправить", 3),
             ("⚙  Настройки", 4),
         ]
 
@@ -210,7 +207,6 @@ class ColdVaultMainWindow(QMainWindow):
         content = QHBoxLayout()
         content.setSpacing(20)
 
-        # Левая колонка: генерация
         gen_card = QFrame()
         gen_card.setObjectName("card")
         gen_layout = QVBoxLayout(gen_card)
@@ -249,7 +245,6 @@ class ColdVaultMainWindow(QMainWindow):
         gen_layout.addStretch()
         content.addWidget(gen_card, 1)
 
-        # Правая колонка: сканирование
         scan_card = QFrame()
         scan_card.setObjectName("card")
         scan_layout = QVBoxLayout(scan_card)
@@ -349,7 +344,6 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.information(self, "Сохранено", f"QR сохранён: {path}")
 
     def _scan_qr_from_file(self):
-        # Используем OpenCV (уже установлен)
         if not HAS_CV2:
             QMessageBox.warning(self, "Нет зависимостей", "Установите:\npip install opencv-python")
             return
@@ -599,47 +593,240 @@ class ColdVaultMainWindow(QMainWindow):
         wrapper_layout.addWidget(scroll)
         return wrapper
 
+    # ─── Страница Подписать & Отправить ─── #
+
     def _build_sign_page(self) -> QWidget:
         page = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+
         layout = QVBoxLayout(page)
         layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(16)
+        layout.setSpacing(20)
 
-        title = QLabel("Подписанные транзакции")
+        title = QLabel("Транзакции")
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        subtitle = QLabel("Подключите USB с подписанными транзакциями для отправки в сеть")
-        subtitle.setObjectName("subtitleLabel")
-        layout.addWidget(subtitle)
+        # ─── Секция 1: Подпись неподписанных ─── #
+        pending_title = QLabel("⯊ ШАГ 1 — Подписать транзакцию (pending → signed)")
+        pending_title.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; padding: 4px 0;"
+        )
+        layout.addWidget(pending_title)
 
-        self._signed_list_widget = QVBoxLayout()
+        pending_hint = QLabel(
+            "Сканируйте USB — найдутся неподписанные транзакции из pending/. "
+            "Выберите файл, введите пароль — подписанная TX сохранится в signed/."
+        )
+        pending_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        pending_hint.setWordWrap(True)
+        layout.addWidget(pending_hint)
+
+        pending_card = QFrame()
+        pending_card.setObjectName("card")
+        pending_card_layout = QVBoxLayout(pending_card)
+
+        self._pending_list_widget = QVBoxLayout()
+        pending_card_layout.addLayout(self._pending_list_widget)
+
+        self._no_pending_label = QLabel("Нет неподписанных транзакций на USB")
+        self._no_pending_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 20px;")
+        self._no_pending_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pending_card_layout.addWidget(self._no_pending_label)
+
+        layout.addWidget(pending_card)
+
+        btn_scan_pending = QPushButton("🔍 Сканировать pending/ на USB")
+        btn_scan_pending.setObjectName("primaryBtn")
+        btn_scan_pending.clicked.connect(self._scan_pending_txs)
+        layout.addWidget(btn_scan_pending)
+
+        # ─── Делитель ─── #
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {COLORS.get('border', '#333')};")
+        layout.addWidget(divider)
+
+        # ─── Секция 2: Broadcast подписанных ─── #
+        signed_title = QLabel("▶ ШАГ 2 — Отправить подписанную транзакцию в сеть")
+        signed_title.setStyleSheet(
+            f"color: {COLORS.get('success', '#4caf50')}; font-size: 15px; font-weight: 700; padding: 4px 0;"
+        )
+        layout.addWidget(signed_title)
+
+        signed_hint = QLabel("Файлы из signed/ на USB. Нажмите 'Отправить в сеть' рядом с нужным файлом.")
+        signed_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        layout.addWidget(signed_hint)
+
         signed_card = QFrame()
         signed_card.setObjectName("card")
-        signed_layout = QVBoxLayout(signed_card)
-        signed_layout.addLayout(self._signed_list_widget)
+        signed_card_layout = QVBoxLayout(signed_card)
+
+        self._signed_list_widget = QVBoxLayout()
+        signed_card_layout.addLayout(self._signed_list_widget)
 
         self._no_signed_label = QLabel("Нет подписанных транзакций на USB")
         self._no_signed_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 20px;")
         self._no_signed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        signed_layout.addWidget(self._no_signed_label)
+        signed_card_layout.addWidget(self._no_signed_label)
 
         layout.addWidget(signed_card)
 
-        btn_layout = QHBoxLayout()
-        self._btn_scan_signed = QPushButton("Сканировать USB")
-        self._btn_scan_signed.setObjectName("secondaryBtn")
-        self._btn_scan_signed.clicked.connect(self._scan_signed_txs)
-        btn_layout.addWidget(self._btn_scan_signed)
-        layout.addLayout(btn_layout)
+        btn_scan_signed = QPushButton("🔍 Сканировать signed/ на USB")
+        btn_scan_signed.setObjectName("secondaryBtn")
+        btn_scan_signed.clicked.connect(self._scan_signed_txs)
+        layout.addWidget(btn_scan_signed)
 
         self._broadcast_log = QTextEdit()
         self._broadcast_log.setReadOnly(True)
-        self._broadcast_log.setMaximumHeight(200)
-        self._broadcast_log.setPlaceholderText("Лог отправки транзакций...")
+        self._broadcast_log.setMaximumHeight(160)
+        self._broadcast_log.setPlaceholderText("Лог операций...")
         layout.addWidget(self._broadcast_log)
         layout.addStretch()
-        return page
+
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.addWidget(scroll)
+        return wrapper
+
+    # ─── Подпись pending TX ─── #
+
+    def _scan_pending_txs(self):
+        if not self._usb_connected:
+            QMessageBox.warning(self, "Ошибка", "USB не подключён")
+            return
+
+        # Очищаем список
+        while self._pending_list_widget.count():
+            item = self._pending_list_widget.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        pending_files = self._usb.list_pending_txs()
+        if not pending_files:
+            self._no_pending_label.show()
+            return
+
+        self._no_pending_label.hide()
+
+        for fname in pending_files:
+            row = QHBoxLayout()
+
+            name_label = QLabel(fname)
+            name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
+            row.addWidget(name_label)
+
+            btn_sign = QPushButton("✎ Подписать")
+            btn_sign.setObjectName("primaryBtn")
+            btn_sign.setFixedWidth(160)
+            btn_sign.clicked.connect(lambda _, f=fname: self._sign_pending_tx(f))
+            row.addWidget(btn_sign)
+
+            wrapper = QWidget()
+            wrapper.setLayout(row)
+            self._pending_list_widget.addWidget(wrapper)
+
+    def _sign_pending_tx(self, filename: str):
+        if not self._km.private_key:
+            QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
+            return
+        try:
+            tx_json = self._usb.read_pending_tx(filename)
+            tx_data = json.loads(tx_json)
+
+            # Показываем данные транзакции для подтверждения
+            to = tx_data.get("to", "?")
+            value_wei = int(tx_data.get("value", 0))
+            value_eth = value_wei / 10**18
+            nonce = tx_data.get("nonce", "?")
+
+            confirm = QMessageBox.question(
+                self,
+                "Подтвердите подпись",
+                f"Отправитель: {to}\n"
+                f"Сумма: {value_eth:.8f} ETH\n"
+                f"Nonce: {nonce}\n\n"
+                f"Подписать транзакцию?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+
+            tx_req = TransactionSigner.deserialize_unsigned_tx(tx_json)
+            signed_hex = TransactionSigner.sign_transaction(tx_req, self._km.private_key)
+
+            signed_filename = filename.replace(".json", "_signed.json")
+            path = self._usb.save_signed_tx(signed_hex, signed_filename)
+
+            # Удаляем из pending
+            self._usb.delete_pending_tx(filename)
+
+            self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
+            QMessageBox.information(
+                self, "Транзакция подписана",
+                f"Файл сохранён: {path}\n\n"
+                f"Теперь нажмите 'Сканировать signed/' и 'Отправить в сеть'."
+            )
+            # Обновляем списки
+            self._scan_pending_txs()
+            self._scan_signed_txs()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка подписи", str(e))
+
+    # ─── Broadcast signed ─── #
+
+    def _scan_signed_txs(self):
+        if not self._usb_connected:
+            return
+
+        while self._signed_list_widget.count():
+            item = self._signed_list_widget.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        signed_files = self._usb.list_signed_txs()
+        if not signed_files:
+            self._no_signed_label.show()
+            return
+
+        self._no_signed_label.hide()
+
+        for fname in signed_files:
+            row = QHBoxLayout()
+            name_label = QLabel(fname)
+            name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
+            row.addWidget(name_label)
+
+            btn_send = QPushButton("▶ Отправить в сеть")
+            btn_send.setObjectName("primaryBtn")
+            btn_send.setFixedWidth(180)
+            btn_send.clicked.connect(lambda _, f=fname: self._broadcast_signed(f))
+            row.addWidget(btn_send)
+
+            wrapper = QWidget()
+            wrapper.setLayout(row)
+            self._signed_list_widget.addWidget(wrapper)
+
+    def _broadcast_signed(self, filename: str):
+        if not self._eth.is_connected:
+            if not self._eth.connect():
+                QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к сети")
+                return
+        try:
+            data = self._usb.read_signed_tx(filename)
+            raw_tx = data.get("raw_tx", "")
+            if not raw_tx:
+                raise ValueError("Пустой raw_tx в файле")
+            self._broadcast_log.append(f"[*] Отправка {filename}...")
+            self._tx_worker.send_tx(raw_tx)
+        except Exception as e:
+            self._broadcast_log.append(f"[!] Ошибка: {e}")
+
+    # ─── Settings ─── #
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
@@ -726,17 +913,12 @@ class ColdVaultMainWindow(QMainWindow):
     def _connect_signals(self):
         self._balance_worker.balance_ready.connect(self._on_balance_received)
         self._balance_worker.error.connect(self._on_network_error)
-
         self._nonce_worker.nonce_ready.connect(self._on_nonce_received)
         self._nonce_worker.error.connect(self._on_network_error)
-
         self._gas_worker.gas_ready.connect(self._on_gas_received)
         self._gas_worker.error.connect(self._on_network_error)
-
         self._tx_worker.tx_sent.connect(self._on_tx_sent)
         self._tx_worker.error.connect(self._on_network_error)
-
-    # ─── Навигация ─── #
 
     def _switch_page(self, idx: int):
         self._stack.setCurrentIndex(idx)
@@ -755,7 +937,7 @@ class ColdVaultMainWindow(QMainWindow):
             vault = Path(drive["path"]) / "ColdVault" / "wallet.vault"
             if vault.exists():
                 self._usb.set_usb_path(drive["path"])
-                self._set_usb_status(True, f"{drive['label']} ({drive['size']})")
+                self._set_usb_status(True, f"{drive['label']} ({drive['size']]}")
                 self._unlock_wallet_dialog()
                 return
 
@@ -774,7 +956,6 @@ class ColdVaultMainWindow(QMainWindow):
             self._usb_display.setText(info)
 
     def _unlock_wallet_dialog(self):
-        from PyQt6.QtWidgets import QInputDialog
         password, ok = QInputDialog.getText(
             self, "ColdVault — Разблокировка",
             "Введите пароль кошелька:",
@@ -797,18 +978,14 @@ class ColdVaultMainWindow(QMainWindow):
             self._fetch_gas_prices()
 
     def _refresh_balance(self):
-        """Баланс и nonce запускаются в отдельных воркерах — не мешают друг другу."""
         if self._address and self._eth.is_connected:
             self._balance_label.setText("Загрузка...")
             self._balance_worker.fetch_balance(self._address)
-            # Nonce — через 500мс чтобы не перетирать
             QTimer.singleShot(500, lambda: self._nonce_worker.fetch_nonce(self._address))
 
     def _fetch_gas_prices(self):
         if self._eth.is_connected:
             self._gas_worker.fetch_gas()
-
-    # ─── Callbacks ─── #
 
     def _on_balance_received(self, data: dict):
         eth = data.get("eth", "0")
@@ -840,8 +1017,6 @@ class ColdVaultMainWindow(QMainWindow):
     def _on_network_error(self, error: str):
         if hasattr(self, '_broadcast_log'):
             self._broadcast_log.append(f"[!] Ошибка: {error}")
-
-    # ─── Создание TX ─── #
 
     def _create_unsigned_tx(self):
         if not self._address:
@@ -885,66 +1060,13 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.information(
                 self, "TX создана",
                 f"Транзакция сохранена на USB:\n{path}\n\n"
-                f"Перенесите USB на офлайн-ПК для подписи."
+                f"Теперь перейдите во вкладку 'Подписать & Отправить' → Сканировать pending/"
             )
-
             self._to_input.clear()
             self._amount_input.setValue(0)
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
-
-    # ─── Broadcast ─── #
-
-    def _scan_signed_txs(self):
-        if not self._usb_connected:
-            QMessageBox.warning(self, "Ошибка", "USB не подключён")
-            return
-
-        while self._signed_list_widget.count():
-            item = self._signed_list_widget.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        signed_files = self._usb.list_signed_txs()
-        if not signed_files:
-            self._no_signed_label.show()
-            return
-
-        self._no_signed_label.hide()
-
-        for fname in signed_files:
-            row = QHBoxLayout()
-            name_label = QLabel(fname)
-            name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
-            row.addWidget(name_label)
-
-            btn_send = QPushButton("Отправить в сеть")
-            btn_send.setObjectName("primaryBtn")
-            btn_send.setFixedWidth(180)
-            btn_send.clicked.connect(lambda _, f=fname: self._broadcast_signed(f))
-            row.addWidget(btn_send)
-
-            wrapper = QWidget()
-            wrapper.setLayout(row)
-            self._signed_list_widget.addWidget(wrapper)
-
-    def _broadcast_signed(self, filename: str):
-        if not self._eth.is_connected:
-            if not self._eth.connect():
-                QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к сети")
-                return
-        try:
-            data = self._usb.read_signed_tx(filename)
-            raw_tx = data.get("raw_tx", "")
-            if not raw_tx:
-                raise ValueError("Пустой raw_tx в файле")
-            self._broadcast_log.append(f"[*] Отправка {filename}...")
-            self._tx_worker.send_tx(raw_tx)
-        except Exception as e:
-            self._broadcast_log.append(f"[!] Ошибка: {e}")
-
-    # ─── Settings ─── #
 
     def _on_tx_type_changed(self, idx: int):
         if idx == 0:
@@ -1018,8 +1140,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._km.clear()
         event.accept()
 
-
-# ─── PIL Image → QPixmap ─── #
 
 def _pil_to_pixmap(pil_img) -> QPixmap:
     import io
