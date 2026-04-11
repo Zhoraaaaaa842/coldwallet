@@ -37,10 +37,16 @@ MAIN_STYLESHEET = f"""
         font-size: 14px;
     }}
 
-    /* ─── Sidebar ─── */
+    /* ─── Sidebar: фон только у самого sidebar, дочерние прозрачны ─── */
     QWidget#sidebar {{
         background-color: {COLORS['bg_secondary']};
         border-right: 1px solid {COLORS['border']};
+    }}
+
+    QWidget#sidebar QWidget,
+    QWidget#sidebar QLabel,
+    QWidget#sidebar QPushButton {{
+        background-color: transparent;
     }}
 
     QPushButton#sidebarBtn {{
