@@ -1,16 +1,15 @@
 """
 QR-коды для получения ETH:
-- генерация QR с адресом (+ опциональная сумма)
-- разбор входящего QR (EIP-681 / raw address)
+- генерация QR с адресом (EIP-681)
+- разбор входящего QR через OpenCV (без проблем с DLL на Windows)
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 try:
     import qrcode
-    from qrcode.image.pil import PilImage
     HAS_QRCODE = True
 except ImportError:
     HAS_QRCODE = False
@@ -22,10 +21,18 @@ except ImportError:
     HAS_PIL = False
 
 try:
-    from pyzbar import pyzbar
-    HAS_PYZBAR = True
+    import cv2
+    HAS_CV2 = True
 except ImportError:
-    HAS_PYZBAR = False
+    HAS_CV2 = False
+
+# Обратная совместимость: если pyzbar всё же установлен — используем его
+HAS_PYZBAR = False
+try:
+    from pyzbar import pyzbar as _pyzbar
+    HAS_PYZBAR = True
+except Exception:
+    pass
 
 
 @dataclass
@@ -46,10 +53,10 @@ def generate_receive_qr(
     chain_id: int = 1,
     label: str = "",
     size: int = 300,
-) -> Optional[object]:  # возвращает PIL Image или None
+):
     """
-    Генерирует QR-код с EIP-681 URI.
-    ethereum:<address>[@<chainId>][?value=<wei>&label=<label>]
+    Генерирует QR-код EIP-681.
+    Возвращает PIL Image.
     """
     if not HAS_QRCODE or not HAS_PIL:
         raise ImportError("Установите: pip install qrcode[pil] Pillow")
@@ -79,7 +86,7 @@ def _build_eip681_uri(
         uri += f"@{chain_id}"
     params = []
     if amount_eth and amount_eth > 0:
-        wei = int(amount_eth * 10**18)
+        wei = int(amount_eth * 10 ** 18)
         params.append(f"value={wei}")
     if label:
         params.append(f"label={label}")
@@ -88,21 +95,19 @@ def _build_eip681_uri(
     return uri
 
 
-# ─── Разбор QR ─── #
+# ─── Разбор QR URI ─── #
 
 def parse_qr_uri(raw: str) -> QRPaymentRequest:
     """
-    Разбирает строку из QR. Поддерживает:
-    - EIP-681: ethereum:0x...@1?value=1000000000000000000&label=Alice
+    Разбирает строку из QR:
+    - EIP-681: ethereum:0x...@1?value=...&label=...
     - Голый адрес: 0x...
     """
     raw = raw.strip()
 
-    # Голый адрес
     if re.fullmatch(r"0x[0-9a-fA-F]{40}", raw):
         return QRPaymentRequest(address=raw, raw=raw)
 
-    # EIP-681
     m = re.match(
         r"ethereum:(?P<addr>0x[0-9a-fA-F]{40})"
         r"(?:@(?P<chain>\d+))?"
@@ -120,7 +125,7 @@ def parse_qr_uri(raw: str) -> QRPaymentRequest:
     amount_eth: Optional[float] = None
     if "value" in params:
         try:
-            amount_eth = int(params["value"]) / 10**18
+            amount_eth = int(params["value"]) / 10 ** 18
         except ValueError:
             pass
 
@@ -133,16 +138,42 @@ def parse_qr_uri(raw: str) -> QRPaymentRequest:
     )
 
 
+# ─── Декодирование QR из файла ─── #
+
 def decode_qr_from_image(image_path: str) -> str:
     """
-    Декодирует QR из файла изображения. Требует pyzbar + Pillow.
-    Возвращает строку содержимого QR.
+    Декодирует QR из PNG/JPG.
+    Сначала пробует OpenCV (работает без DLL на Windows),
+    затем pyzbar как резерв.
     """
-    if not HAS_PYZBAR or not HAS_PIL:
-        raise ImportError("Установите: pip install pyzbar Pillow")
+    # Приоритет 1: OpenCV
+    if HAS_CV2:
+        return _decode_with_cv2(image_path)
 
+    # Приоритет 2: pyzbar (fallback)
+    if HAS_PYZBAR and HAS_PIL:
+        return _decode_with_pyzbar(image_path)
+
+    raise ImportError(
+        "Установите OpenCV:\n"
+        "pip install opencv-python"
+    )
+
+
+def _decode_with_cv2(image_path: str) -> str:
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Не удалось открыть файл: {image_path}")
+    detector = cv2.QRCodeDetector()
+    data, _, _ = detector.detectAndDecode(img)
+    if not data:
+        raise ValueError("QR-код не найден в изображении")
+    return data
+
+
+def _decode_with_pyzbar(image_path: str) -> str:
     img = PILImage.open(image_path)
-    decoded = pyzbar.decode(img)
+    decoded = _pyzbar.decode(img)
     if not decoded:
         raise ValueError("QR-код не найден в изображении")
     return decoded[0].data.decode("utf-8")
