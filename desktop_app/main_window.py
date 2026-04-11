@@ -1411,30 +1411,60 @@ class ColdVaultMainWindow(QMainWindow):
             btn.setChecked(i == idx)
 
     def _detect_usb(self):
+        """
+        Обнаруживает USB-накопители.
+        detect_usb_drives() возвращает List[Dict[str, str]]:
+            [{"path": "E:\\", "label": "MYUSB", "size": "16.0 GB"}, ...]
+        """
         try:
-            drives = self._usb.detect_usb_drives()
+            drives = USBManager.detect_usb_drives()
             if drives:
                 self._usb_connected = True
-                drive = drives[0]
-                self._usb_status.setText(f"● USB: {drive}")
+                # Берём первый накопитель — drives[0] это словарь
+                drive_info = drives[0]
+                drive_path = drive_info["path"]   # например "E:\\" или "/media/usb"
+                drive_label = drive_info.get("label", drive_path)
+
+                self._usb_status.setText(f"● USB: {drive_label}")
                 self._usb_status.setStyleSheet(
                     f"color: {COLORS['success']}; font-size: 12px; padding: 4px 8px 16px;"
                 )
                 if self._usb_display:
                     self._usb_display.setText("Подкл.")
-                self._load_wallet_from_usb(drive)
+
+                # Передаём строку-путь, а не весь словарь
+                self._load_wallet_from_usb(drive_path)
             else:
                 self._usb_connected = False
                 self._usb_status.setText("● USB отключён")
                 self._usb_status.setStyleSheet(
                     f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;"
                 )
-        except Exception as e:
+        except Exception:
             pass
 
-    def _load_wallet_from_usb(self, drive: str):
+    def _load_wallet_from_usb(self, drive_path: str):
+        """
+        Загружает кошелёк с USB.
+        drive_path — строка-путь к корню USB (напр. "E:\\" или "/media/usb").
+        Ищет файл ColdVault/wallet.vault и читает адрес из него.
+        Если файл есть — запрашивает пароль для разблокировки.
+        """
         try:
-            address = self._km.load_address_from_usb(drive)
+            self._usb.set_usb_path(drive_path)
+
+            if not self._usb.is_initialized:
+                # Кошелёк ещё не создан на этой флешке — можно инициализировать
+                return
+
+            wallet_file = str(self._usb.wallet_file)
+
+            # Читаем адрес из vault-файла без расшифровки приватного ключа
+            import json as _json
+            with open(wallet_file, "r", encoding="utf-8") as f:
+                wallet_data = _json.load(f)
+            address = wallet_data.get("address")
+
             if address:
                 self._address = address
                 short = address[:10] + "…" + address[-8:]
@@ -1443,6 +1473,7 @@ class ColdVaultMainWindow(QMainWindow):
                 self._btn_create_tx.setEnabled(True)
                 self._refresh_balance()
                 self._load_tx_history()
+
         except Exception:
             pass
 
