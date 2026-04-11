@@ -110,6 +110,10 @@ class ColdVaultMainWindow(QMainWindow):
         self._balance_eth = "0"
         self._current_nonce = 0
         self._usb_connected = False
+        self._usb_display = None
+        self._nonce_display = None
+        self._net_display = None
+        self._gas_display = None
 
         self.setStyleSheet(MAIN_STYLESHEET)
         self._build_ui()
@@ -699,7 +703,6 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "USB не подключён")
             return
 
-        # Очищаем список
         while self._pending_list_widget.count():
             item = self._pending_list_widget.takeAt(0)
             if item.widget():
@@ -737,7 +740,6 @@ class ColdVaultMainWindow(QMainWindow):
             tx_json = self._usb.read_pending_tx(filename)
             tx_data = json.loads(tx_json)
 
-            # Показываем данные транзакции для подтверждения
             to = tx_data.get("to", "?")
             value_wei = int(tx_data.get("value", 0))
             value_eth = value_wei / 10**18
@@ -746,7 +748,7 @@ class ColdVaultMainWindow(QMainWindow):
             confirm = QMessageBox.question(
                 self,
                 "Подтвердите подпись",
-                f"Отправитель: {to}\n"
+                f"Получатель: {to}\n"
                 f"Сумма: {value_eth:.8f} ETH\n"
                 f"Nonce: {nonce}\n\n"
                 f"Подписать транзакцию?",
@@ -761,7 +763,6 @@ class ColdVaultMainWindow(QMainWindow):
             signed_filename = filename.replace(".json", "_signed.json")
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
 
-            # Удаляем из pending
             self._usb.delete_pending_tx(filename)
 
             self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
@@ -770,7 +771,6 @@ class ColdVaultMainWindow(QMainWindow):
                 f"Файл сохранён: {path}\n\n"
                 f"Теперь нажмите 'Сканировать signed/' и 'Отправить в сеть'."
             )
-            # Обновляем списки
             self._scan_pending_txs()
             self._scan_signed_txs()
 
@@ -937,7 +937,9 @@ class ColdVaultMainWindow(QMainWindow):
             vault = Path(drive["path"]) / "ColdVault" / "wallet.vault"
             if vault.exists():
                 self._usb.set_usb_path(drive["path"])
-                self._set_usb_status(True, f"{drive['label']} ({drive['size']]}")
+                label = drive["label"]
+                size = drive["size"]
+                self._set_usb_status(True, f"{label} ({size})")
                 self._unlock_wallet_dialog()
                 return
 
