@@ -1,6 +1,5 @@
 """
 ColdVault ETH — Главное окно десктоп-приложения.
-Ledger-like дизайн: sidebar навигация, карточка баланса, отправка TX, получение по QR.
 """
 
 import os
@@ -26,7 +25,7 @@ from cold_wallet.core.transaction import TransactionSigner, TransactionRequest
 from cold_wallet.core.eth_network import EthNetwork
 from cold_wallet.core.qr_receiver import (
     generate_receive_qr, parse_qr_uri, decode_qr_from_image,
-    HAS_QRCODE, HAS_PIL, HAS_PYZBAR
+    HAS_QRCODE, HAS_PIL, HAS_CV2
 )
 from cold_wallet.storage.usb_manager import USBManager
 from desktop_app.styles import (
@@ -37,7 +36,7 @@ from desktop_app.styles import (
 # ─── Фоновые потоки ─── #
 
 class NetworkWorker(QThread):
-    """Поток для сетевых запросов (не блокирует UI)."""
+    """универсальный поток для сетевых запросов."""
     balance_ready = pyqtSignal(dict)
     gas_ready = pyqtSignal(dict)
     nonce_ready = pyqtSignal(int)
@@ -53,21 +52,25 @@ class NetworkWorker(QThread):
     def fetch_balance(self, address: str):
         self._task = "balance"
         self._params = {"address": address}
-        self.start()
+        if not self.isRunning():
+            self.start()
 
     def fetch_gas(self):
         self._task = "gas"
-        self.start()
+        if not self.isRunning():
+            self.start()
 
     def fetch_nonce(self, address: str):
         self._task = "nonce"
         self._params = {"address": address}
-        self.start()
+        if not self.isRunning():
+            self.start()
 
     def send_tx(self, raw_tx: str):
         self._task = "send_tx"
         self._params = {"raw_tx": raw_tx}
-        self.start()
+        if not self.isRunning():
+            self.start()
 
     def run(self):
         try:
@@ -96,25 +99,26 @@ class ColdVaultMainWindow(QMainWindow):
         self.setMinimumSize(1100, 720)
         self.resize(1200, 800)
 
-        # Состояние
         self._km = KeyManager()
         self._usb = USBManager()
         self._eth = EthNetwork("mainnet")
-        self._worker = NetworkWorker(self._eth)
+        # Отдельные воркеры — не перетирают задачу друг друга
+        self._balance_worker = NetworkWorker(self._eth)
+        self._nonce_worker = NetworkWorker(self._eth)
+        self._gas_worker = NetworkWorker(self._eth)
+        self._tx_worker = NetworkWorker(self._eth)
         self._address: Optional[str] = None
         self._balance_eth = "0"
         self._current_nonce = 0
         self._usb_connected = False
 
-        # UI
         self.setStyleSheet(MAIN_STYLESHEET)
         self._build_ui()
         self._connect_signals()
 
-        # Автообнаружение USB при запуске
         QTimer.singleShot(500, self._detect_usb)
 
-    # ─── Построение UI ─── #
+    # ─── UI ─── #
 
     def _build_ui(self):
         central = QWidget()
@@ -129,7 +133,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_dashboard_page())   # 0
         self._stack.addWidget(self._build_send_page())         # 1
-        self._stack.addWidget(self._build_receive_page())      # 2  ← QR
+        self._stack.addWidget(self._build_receive_page())      # 2
         self._stack.addWidget(self._build_sign_page())         # 3
         self._stack.addWidget(self._build_settings_page())     # 4
         main_layout.addWidget(self._stack, 1)
@@ -152,12 +156,7 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addWidget(logo)
 
         self._usb_status = QLabel("● USB отключён")
-        self._usb_status.setObjectName("statusDisconnected")
-        self._usb_status.setStyleSheet(f"""
-            color: {COLORS['error']};
-            font-size: 12px;
-            padding: 4px 8px 16px;
-        """)
+        self._usb_status.setStyleSheet(f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;")
         layout.addWidget(self._usb_status)
 
         nav_items = [
@@ -211,7 +210,7 @@ class ColdVaultMainWindow(QMainWindow):
         content = QHBoxLayout()
         content.setSpacing(20)
 
-        # ── Левая колонка: генерация QR ── #
+        # Левая колонка: генерация
         gen_card = QFrame()
         gen_card.setObjectName("card")
         gen_layout = QVBoxLayout(gen_card)
@@ -221,7 +220,6 @@ class ColdVaultMainWindow(QMainWindow):
         gen_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 16px;")
         gen_layout.addWidget(gen_title)
 
-        # QR изображение
         self._qr_image_label = QLabel()
         self._qr_image_label.setFixedSize(250, 250)
         self._qr_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -231,7 +229,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._qr_image_label.setText("Подключите\nUSB")
         gen_layout.addWidget(self._qr_image_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        # Опциональная сумма
         gen_layout.addWidget(self._make_field_label("Сумма ETH (опционально)"))
         self._qr_amount_input = QDoubleSpinBox()
         self._qr_amount_input.setDecimals(8)
@@ -252,7 +249,7 @@ class ColdVaultMainWindow(QMainWindow):
         gen_layout.addStretch()
         content.addWidget(gen_card, 1)
 
-        # ── Правая колонка: сканирование входящего QR ── #
+        # Правая колонка: сканирование
         scan_card = QFrame()
         scan_card.setObjectName("card")
         scan_layout = QVBoxLayout(scan_card)
@@ -285,7 +282,6 @@ class ColdVaultMainWindow(QMainWindow):
         btn_parse.clicked.connect(self._parse_qr_uri)
         scan_layout.addWidget(btn_parse)
 
-        # Результат разбора
         result_card = QFrame()
         result_card.setObjectName("card")
         result_layout = QVBoxLayout(result_card)
@@ -315,7 +311,6 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addLayout(content)
         layout.addStretch()
 
-        # Храним последний разобранный запрос
         self._last_qr_request = None
         self._qr_pil_image = None
 
@@ -326,11 +321,9 @@ class ColdVaultMainWindow(QMainWindow):
     def _generate_qr(self):
         if not self._address:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
+            return
         if not HAS_QRCODE or not HAS_PIL:
-            QMessageBox.warning(
-                self, "Нет зависимостей",
-                "Установите:\npip install qrcode[pil] Pillow"
-            )
+            QMessageBox.warning(self, "Нет зависимостей", "Установите:\npip install qrcode[pil] Pillow")
             return
         try:
             amount = self._qr_amount_input.value() or None
@@ -350,19 +343,15 @@ class ColdVaultMainWindow(QMainWindow):
         if not self._qr_pil_image:
             QMessageBox.information(self, "Нет QR", "Сначала сгенерируйте QR-код")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить QR", "qr_receive.png", "PNG (*.png)"
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить QR", "qr_receive.png", "PNG (*.png)")
         if path:
             self._qr_pil_image.save(path)
             QMessageBox.information(self, "Сохранено", f"QR сохранён: {path}")
 
     def _scan_qr_from_file(self):
-        if not HAS_PYZBAR or not HAS_PIL:
-            QMessageBox.warning(
-                self, "Нет зависимостей",
-                "Установите:\npip install pyzbar Pillow"
-            )
+        # Используем OpenCV (уже установлен)
+        if not HAS_CV2:
+            QMessageBox.warning(self, "Нет зависимостей", "Установите:\npip install opencv-python")
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Выберите файл QR", "", "Images (*.png *.jpg *.jpeg *.bmp)"
@@ -384,23 +373,21 @@ class ColdVaultMainWindow(QMainWindow):
             req = parse_qr_uri(raw)
             self._last_qr_request = req
             self._qr_result_addr.setText(req.address)
-            if req.amount_eth:
-                self._qr_result_amount.setText(f"Сумма: {req.amount_eth} ETH")
-            else:
-                self._qr_result_amount.setText("Сумма: не указана")
+            self._qr_result_amount.setText(
+                f"Сумма: {req.amount_eth} ETH" if req.amount_eth else "Сумма: не указана"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def _fill_send_from_qr(self):
-        """Заполняет форму Отправки из разобранного QR."""
         if not self._last_qr_request:
-            QMessageBox.information(self, "Нет данных", "Сначала разоберите QR")
+            QMessageBox.information(self, "Нет данных", "Сначала разберите QR")
             return
         req = self._last_qr_request
         self._to_input.setText(req.address)
         if req.amount_eth:
             self._amount_input.setValue(req.amount_eth)
-        self._switch_page(1)  # Переход на страницу Отправки
+        self._switch_page(1)
 
     # ─── Dashboard ─── #
 
@@ -511,9 +498,7 @@ class ColdVaultMainWindow(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        subtitle = QLabel(
-            "Создайте транзакцию → сохраните на USB → подпишите офлайн → отправьте"
-        )
+        subtitle = QLabel("Создайте транзакцию → сохраните на USB → подпишите офлайн → отправьте")
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
 
@@ -600,14 +585,11 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addWidget(form_card)
 
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(12)
-
         self._btn_create_tx = QPushButton("Создать TX → USB")
         self._btn_create_tx.setObjectName("primaryBtn")
         self._btn_create_tx.setEnabled(False)
         self._btn_create_tx.clicked.connect(self._create_unsigned_tx)
         btn_layout.addWidget(self._btn_create_tx)
-
         layout.addLayout(btn_layout)
         layout.addStretch()
 
@@ -627,9 +609,7 @@ class ColdVaultMainWindow(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        subtitle = QLabel(
-            "Подключите USB с подписанными транзакциями для отправки в сеть"
-        )
+        subtitle = QLabel("Подключите USB с подписанными транзакциями для отправки в сеть")
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
 
@@ -647,12 +627,10 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addWidget(signed_card)
 
         btn_layout = QHBoxLayout()
-
         self._btn_scan_signed = QPushButton("Сканировать USB")
         self._btn_scan_signed.setObjectName("secondaryBtn")
         self._btn_scan_signed.clicked.connect(self._scan_signed_txs)
         btn_layout.addWidget(self._btn_scan_signed)
-
         layout.addLayout(btn_layout)
 
         self._broadcast_log = QTextEdit()
@@ -660,7 +638,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._broadcast_log.setMaximumHeight(200)
         self._broadcast_log.setPlaceholderText("Лог отправки транзакций...")
         layout.addWidget(self._broadcast_log)
-
         layout.addStretch()
         return page
 
@@ -693,7 +670,6 @@ class ColdVaultMainWindow(QMainWindow):
         btn_apply_rpc.setObjectName("primaryBtn")
         btn_apply_rpc.clicked.connect(self._apply_custom_rpc)
         net_layout.addWidget(btn_apply_rpc)
-
         layout.addWidget(net_card)
 
         usb_card = QFrame()
@@ -716,7 +692,6 @@ class ColdVaultMainWindow(QMainWindow):
         btn_connect_manual.clicked.connect(self._connect_manual_usb)
         btn_row.addWidget(btn_connect_manual)
         usb_layout.addLayout(btn_row)
-
         layout.addWidget(usb_card)
 
         sec_card = QFrame()
@@ -731,7 +706,6 @@ class ColdVaultMainWindow(QMainWindow):
         btn_lock.setObjectName("dangerBtn")
         btn_lock.clicked.connect(self._lock_wallet)
         sec_layout.addWidget(btn_lock)
-
         layout.addWidget(sec_card)
         layout.addStretch()
 
@@ -750,11 +724,17 @@ class ColdVaultMainWindow(QMainWindow):
     # ─── Сигналы ─── #
 
     def _connect_signals(self):
-        self._worker.balance_ready.connect(self._on_balance_received)
-        self._worker.gas_ready.connect(self._on_gas_received)
-        self._worker.nonce_ready.connect(self._on_nonce_received)
-        self._worker.tx_sent.connect(self._on_tx_sent)
-        self._worker.error.connect(self._on_network_error)
+        self._balance_worker.balance_ready.connect(self._on_balance_received)
+        self._balance_worker.error.connect(self._on_network_error)
+
+        self._nonce_worker.nonce_ready.connect(self._on_nonce_received)
+        self._nonce_worker.error.connect(self._on_network_error)
+
+        self._gas_worker.gas_ready.connect(self._on_gas_received)
+        self._gas_worker.error.connect(self._on_network_error)
+
+        self._tx_worker.tx_sent.connect(self._on_tx_sent)
+        self._tx_worker.error.connect(self._on_network_error)
 
     # ─── Навигация ─── #
 
@@ -785,15 +765,13 @@ class ColdVaultMainWindow(QMainWindow):
     def _set_usb_status(self, connected: bool, info: str):
         self._usb_connected = connected
         if connected:
-            self._usb_status.setText(f"● USB подключён")
+            self._usb_status.setText("● USB подключён")
             self._usb_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 12px; padding: 4px 8px 16px;")
-            if self._usb_display:
-                self._usb_display.setText(info)
         else:
-            self._usb_status.setText(f"● USB отключён")
+            self._usb_status.setText("● USB отключён")
             self._usb_status.setStyleSheet(f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;")
-            if self._usb_display:
-                self._usb_display.setText(info)
+        if self._usb_display:
+            self._usb_display.setText(info)
 
     def _unlock_wallet_dialog(self):
         from PyQt6.QtWidgets import QInputDialog
@@ -819,14 +797,16 @@ class ColdVaultMainWindow(QMainWindow):
             self._fetch_gas_prices()
 
     def _refresh_balance(self):
+        """Баланс и nonce запускаются в отдельных воркерах — не мешают друг другу."""
         if self._address and self._eth.is_connected:
             self._balance_label.setText("Загрузка...")
-            self._worker.fetch_balance(self._address)
-            self._worker.fetch_nonce(self._address)
+            self._balance_worker.fetch_balance(self._address)
+            # Nonce — через 500мс чтобы не перетирать
+            QTimer.singleShot(500, lambda: self._nonce_worker.fetch_nonce(self._address))
 
     def _fetch_gas_prices(self):
         if self._eth.is_connected:
-            self._worker.fetch_gas()
+            self._gas_worker.fetch_gas()
 
     # ─── Callbacks ─── #
 
@@ -855,13 +835,11 @@ class ColdVaultMainWindow(QMainWindow):
 
     def _on_tx_sent(self, tx_hash: str):
         self._broadcast_log.append(f"[✓] TX отправлена: {tx_hash}")
-        QMessageBox.information(
-            self, "Транзакция отправлена",
-            f"TX Hash:\n{tx_hash}\n\nОтслеживайте на etherscan.io"
-        )
+        QMessageBox.information(self, "Транзакция отправлена", f"TX Hash:\n{tx_hash}\n\nОтслеживайте на etherscan.io")
 
     def _on_network_error(self, error: str):
-        self._broadcast_log.append(f"[!] Ошибка: {error}")
+        if hasattr(self, '_broadcast_log'):
+            self._broadcast_log.append(f"[!] Ошибка: {error}")
 
     # ─── Создание TX ─── #
 
@@ -916,7 +894,7 @@ class ColdVaultMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
-    # ─── Broadcast signed TX ─── #
+    # ─── Broadcast ─── #
 
     def _scan_signed_txs(self):
         if not self._usb_connected:
@@ -937,7 +915,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         for fname in signed_files:
             row = QHBoxLayout()
-
             name_label = QLabel(fname)
             name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
             row.addWidget(name_label)
@@ -957,16 +934,13 @@ class ColdVaultMainWindow(QMainWindow):
             if not self._eth.connect():
                 QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к сети")
                 return
-
         try:
             data = self._usb.read_signed_tx(filename)
             raw_tx = data.get("raw_tx", "")
             if not raw_tx:
                 raise ValueError("Пустой raw_tx в файле")
-
             self._broadcast_log.append(f"[*] Отправка {filename}...")
-            self._worker.send_tx(raw_tx)
-
+            self._tx_worker.send_tx(raw_tx)
         except Exception as e:
             self._broadcast_log.append(f"[!] Ошибка: {e}")
 
@@ -983,7 +957,10 @@ class ColdVaultMainWindow(QMainWindow):
     def _change_network(self, idx: int):
         network = "mainnet" if idx == 0 else "sepolia"
         self._eth = EthNetwork(network)
-        self._worker = NetworkWorker(self._eth)
+        self._balance_worker = NetworkWorker(self._eth)
+        self._nonce_worker = NetworkWorker(self._eth)
+        self._gas_worker = NetworkWorker(self._eth)
+        self._tx_worker = NetworkWorker(self._eth)
         self._connect_signals()
         name = "Ethereum Mainnet" if idx == 0 else "Sepolia Testnet"
         self._network_label.setText(name)
@@ -995,7 +972,10 @@ class ColdVaultMainWindow(QMainWindow):
         if url:
             network = "mainnet" if self._network_combo.currentIndex() == 0 else "sepolia"
             self._eth = EthNetwork(network, custom_rpc=url)
-            self._worker = NetworkWorker(self._eth)
+            self._balance_worker = NetworkWorker(self._eth)
+            self._nonce_worker = NetworkWorker(self._eth)
+            self._gas_worker = NetworkWorker(self._eth)
+            self._tx_worker = NetworkWorker(self._eth)
             self._connect_signals()
             if self._eth.connect():
                 QMessageBox.information(self, "Успех", f"Подключено к {url}")
@@ -1017,11 +997,7 @@ class ColdVaultMainWindow(QMainWindow):
                 self._set_usb_status(True, path)
                 self._unlock_wallet_dialog()
             else:
-                QMessageBox.warning(
-                    self, "Внимание",
-                    "ColdVault не найден на этом USB.\n"
-                    "Используйте install_to_usb.py для установки."
-                )
+                QMessageBox.warning(self, "Внимание", "ColdVault не найден на этом USB.")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -1038,17 +1014,14 @@ class ColdVaultMainWindow(QMainWindow):
             clipboard = QApplication.clipboard()
             clipboard.setText(self._address)
 
-    # ─── Cleanup ─── #
-
     def closeEvent(self, event):
         self._km.clear()
         event.accept()
 
 
-# ─── Вспомогательная функция: PIL Image → QPixmap ─── #
+# ─── PIL Image → QPixmap ─── #
 
 def _pil_to_pixmap(pil_img) -> QPixmap:
-    """Конвертирует PIL Image в QPixmap для отображения в PyQt6."""
     import io
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
