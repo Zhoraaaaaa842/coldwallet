@@ -1,6 +1,6 @@
 """
 ColdVault ETH — Главное окно десктоп-приложения.
-Ledger-like дизайн: sidebar навигация, карточка баланса, отправка TX.
+Ledger-like дизайн: sidebar навигация, карточка баланса, отправка TX, получение по QR.
 """
 
 import os
@@ -17,13 +17,17 @@ from PyQt6.QtWidgets import (
     QApplication, QProgressBar, QGroupBox, QGridLayout, QScrollArea
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QFont, QIcon, QClipboard
+from PyQt6.QtGui import QFont, QIcon, QClipboard, QPixmap, QImage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cold_wallet.core.key_manager import KeyManager
 from cold_wallet.core.transaction import TransactionSigner, TransactionRequest
 from cold_wallet.core.eth_network import EthNetwork
+from cold_wallet.core.qr_receiver import (
+    generate_receive_qr, parse_qr_uri, decode_qr_from_image,
+    HAS_QRCODE, HAS_PIL, HAS_PYZBAR
+)
 from cold_wallet.storage.usb_manager import USBManager
 from desktop_app.styles import (
     MAIN_STYLESHEET, COLORS, CARD_BALANCE_STYLE, ETH_ICON_STYLE
@@ -119,16 +123,15 @@ class ColdVaultMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Sidebar
         sidebar = self._build_sidebar()
         main_layout.addWidget(sidebar)
 
-        # Content area
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_dashboard_page())   # 0
         self._stack.addWidget(self._build_send_page())         # 1
-        self._stack.addWidget(self._build_sign_page())         # 2
-        self._stack.addWidget(self._build_settings_page())     # 3
+        self._stack.addWidget(self._build_receive_page())      # 2  ← QR
+        self._stack.addWidget(self._build_sign_page())         # 3
+        self._stack.addWidget(self._build_settings_page())     # 4
         main_layout.addWidget(self._stack, 1)
 
     def _build_sidebar(self) -> QWidget:
@@ -139,7 +142,6 @@ class ColdVaultMainWindow(QMainWindow):
         layout.setContentsMargins(12, 20, 12, 20)
         layout.setSpacing(4)
 
-        # Лого
         logo = QLabel("◈ ColdVault")
         logo.setStyleSheet(f"""
             color: {COLORS['accent']};
@@ -149,7 +151,6 @@ class ColdVaultMainWindow(QMainWindow):
         """)
         layout.addWidget(logo)
 
-        # USB статус
         self._usb_status = QLabel("● USB отключён")
         self._usb_status.setObjectName("statusDisconnected")
         self._usb_status.setStyleSheet(f"""
@@ -159,12 +160,12 @@ class ColdVaultMainWindow(QMainWindow):
         """)
         layout.addWidget(self._usb_status)
 
-        # Навигация
         nav_items = [
             ("⌂  Кошелёк", 0),
             ("↗  Отправить", 1),
-            ("✎  Подписать", 2),
-            ("⚙  Настройки", 3),
+            ("▤  Получить (QR)", 2),
+            ("✎  Подписать", 3),
+            ("⚙  Настройки", 4),
         ]
 
         self._nav_buttons = []
@@ -179,13 +180,11 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addStretch()
 
-        # Сеть
         self._network_label = QLabel("Ethereum Mainnet")
         self._network_label.setObjectName("networkLabel")
         self._network_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._network_label)
 
-        # Версия
         ver = QLabel("v1.0.0")
         ver.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; padding: 8px;")
         ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -193,18 +192,228 @@ class ColdVaultMainWindow(QMainWindow):
 
         return sidebar
 
+    # ─── Страница Получить (QR) ─── #
+
+    def _build_receive_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 30, 40, 30)
+        layout.setSpacing(16)
+
+        title = QLabel("Получить ETH")
+        title.setObjectName("titleLabel")
+        layout.addWidget(title)
+
+        subtitle = QLabel("Покажите QR отправителю — или сканируйте входящий QR для заполнения формы отправки")
+        subtitle.setObjectName("subtitleLabel")
+        layout.addWidget(subtitle)
+
+        content = QHBoxLayout()
+        content.setSpacing(20)
+
+        # ── Левая колонка: генерация QR ── #
+        gen_card = QFrame()
+        gen_card.setObjectName("card")
+        gen_layout = QVBoxLayout(gen_card)
+        gen_layout.setSpacing(12)
+
+        gen_title = QLabel("Генерация QR для получения")
+        gen_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 16px;")
+        gen_layout.addWidget(gen_title)
+
+        # QR изображение
+        self._qr_image_label = QLabel()
+        self._qr_image_label.setFixedSize(250, 250)
+        self._qr_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._qr_image_label.setStyleSheet(
+            f"background: white; border-radius: 8px; border: 1px solid {COLORS.get('border', '#333')};"
+        )
+        self._qr_image_label.setText("Подключите\nUSB")
+        gen_layout.addWidget(self._qr_image_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # Опциональная сумма
+        gen_layout.addWidget(self._make_field_label("Сумма ETH (опционально)"))
+        self._qr_amount_input = QDoubleSpinBox()
+        self._qr_amount_input.setDecimals(8)
+        self._qr_amount_input.setMaximum(1_000_000)
+        self._qr_amount_input.setSpecialValueText("Любая сумма")
+        gen_layout.addWidget(self._qr_amount_input)
+
+        btn_gen = QPushButton("⎙ Сгенерировать QR")
+        btn_gen.setObjectName("primaryBtn")
+        btn_gen.clicked.connect(self._generate_qr)
+        gen_layout.addWidget(btn_gen)
+
+        btn_save_qr = QPushButton("↓ Сохранить QR в PNG")
+        btn_save_qr.setObjectName("secondaryBtn")
+        btn_save_qr.clicked.connect(self._save_qr_image)
+        gen_layout.addWidget(btn_save_qr)
+
+        gen_layout.addStretch()
+        content.addWidget(gen_card, 1)
+
+        # ── Правая колонка: сканирование входящего QR ── #
+        scan_card = QFrame()
+        scan_card.setObjectName("card")
+        scan_layout = QVBoxLayout(scan_card)
+        scan_layout.setSpacing(12)
+
+        scan_title = QLabel("Сканировать входящий QR")
+        scan_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 16px;")
+        scan_layout.addWidget(scan_title)
+
+        scan_hint = QLabel(
+            "Загрузите PNG/JPG изображение QR или введите URI вручную.\n"
+            "Форматы: ethereum:0x... или голый 0x-адрес"
+        )
+        scan_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        scan_hint.setWordWrap(True)
+        scan_layout.addWidget(scan_hint)
+
+        btn_scan_file = QPushButton("📁 Загрузить изображение QR")
+        btn_scan_file.setObjectName("secondaryBtn")
+        btn_scan_file.clicked.connect(self._scan_qr_from_file)
+        scan_layout.addWidget(btn_scan_file)
+
+        scan_layout.addWidget(self._make_field_label("или введите URI вручную:"))
+        self._qr_uri_input = QLineEdit()
+        self._qr_uri_input.setPlaceholderText("ethereum:0x... или 0x...")
+        scan_layout.addWidget(self._qr_uri_input)
+
+        btn_parse = QPushButton("▶ Разобрать URI")
+        btn_parse.setObjectName("primaryBtn")
+        btn_parse.clicked.connect(self._parse_qr_uri)
+        scan_layout.addWidget(btn_parse)
+
+        # Результат разбора
+        result_card = QFrame()
+        result_card.setObjectName("card")
+        result_layout = QVBoxLayout(result_card)
+
+        res_hdr = QLabel("Результат:")
+        res_hdr.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 600;")
+        result_layout.addWidget(res_hdr)
+
+        self._qr_result_addr = QLabel("—")
+        self._qr_result_addr.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 14px; font-weight: 700;")
+        self._qr_result_addr.setWordWrap(True)
+        result_layout.addWidget(self._qr_result_addr)
+
+        self._qr_result_amount = QLabel("")
+        self._qr_result_amount.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 13px;")
+        result_layout.addWidget(self._qr_result_amount)
+
+        btn_fill_send = QPushButton("↗ Заполнить форму Отправки")
+        btn_fill_send.setObjectName("primaryBtn")
+        btn_fill_send.clicked.connect(self._fill_send_from_qr)
+        result_layout.addWidget(btn_fill_send)
+
+        scan_layout.addWidget(result_card)
+        scan_layout.addStretch()
+        content.addWidget(scan_card, 1)
+
+        layout.addLayout(content)
+        layout.addStretch()
+
+        # Храним последний разобранный запрос
+        self._last_qr_request = None
+        self._qr_pil_image = None
+
+        return page
+
+    # ─── QR логика ─── #
+
+    def _generate_qr(self):
+        if not self._address:
+            QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
+        if not HAS_QRCODE or not HAS_PIL:
+            QMessageBox.warning(
+                self, "Нет зависимостей",
+                "Установите:\npip install qrcode[pil] Pillow"
+            )
+            return
+        try:
+            amount = self._qr_amount_input.value() or None
+            chain_id = self._eth.chain_id or 1
+            pil_img = generate_receive_qr(
+                address=self._address,
+                amount_eth=amount,
+                chain_id=chain_id,
+                size=250,
+            )
+            self._qr_pil_image = pil_img
+            self._qr_image_label.setPixmap(_pil_to_pixmap(pil_img))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _save_qr_image(self):
+        if not self._qr_pil_image:
+            QMessageBox.information(self, "Нет QR", "Сначала сгенерируйте QR-код")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить QR", "qr_receive.png", "PNG (*.png)"
+        )
+        if path:
+            self._qr_pil_image.save(path)
+            QMessageBox.information(self, "Сохранено", f"QR сохранён: {path}")
+
+    def _scan_qr_from_file(self):
+        if not HAS_PYZBAR or not HAS_PIL:
+            QMessageBox.warning(
+                self, "Нет зависимостей",
+                "Установите:\npip install pyzbar Pillow"
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите файл QR", "", "Images (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not path:
+            return
+        try:
+            raw = decode_qr_from_image(path)
+            self._qr_uri_input.setText(raw)
+            self._parse_qr_uri()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _parse_qr_uri(self):
+        raw = self._qr_uri_input.text().strip()
+        if not raw:
+            return
+        try:
+            req = parse_qr_uri(raw)
+            self._last_qr_request = req
+            self._qr_result_addr.setText(req.address)
+            if req.amount_eth:
+                self._qr_result_amount.setText(f"Сумма: {req.amount_eth} ETH")
+            else:
+                self._qr_result_amount.setText("Сумма: не указана")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _fill_send_from_qr(self):
+        """Заполняет форму Отправки из разобранного QR."""
+        if not self._last_qr_request:
+            QMessageBox.information(self, "Нет данных", "Сначала разоберите QR")
+            return
+        req = self._last_qr_request
+        self._to_input.setText(req.address)
+        if req.amount_eth:
+            self._amount_input.setValue(req.amount_eth)
+        self._switch_page(1)  # Переход на страницу Отправки
+
+    # ─── Dashboard ─── #
+
     def _build_dashboard_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(40, 30, 40, 30)
         layout.setSpacing(20)
 
-        # Заголовок
         title = QLabel("Кошелёк")
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        # Карточка баланса
         balance_card = QFrame()
         balance_card.setStyleSheet(CARD_BALANCE_STYLE)
         bc_layout = QVBoxLayout(balance_card)
@@ -226,7 +435,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addWidget(balance_card)
 
-        # Кнопки действий
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(12)
 
@@ -248,26 +456,21 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(actions_layout)
 
-        # Информационные карточки
         info_grid = QGridLayout()
         info_grid.setSpacing(12)
 
-        # Nonce
         nonce_card = self._make_info_card("Nonce", "—")
         self._nonce_display = nonce_card.findChild(QLabel, "infoValue")
         info_grid.addWidget(nonce_card, 0, 0)
 
-        # Network
         net_card = self._make_info_card("Сеть", "Mainnet")
         self._net_display = net_card.findChild(QLabel, "infoValue")
         info_grid.addWidget(net_card, 0, 1)
 
-        # Gas
         gas_card = self._make_info_card("Gas Price", "—")
         self._gas_display = gas_card.findChild(QLabel, "infoValue")
         info_grid.addWidget(gas_card, 0, 2)
 
-        # USB
         usb_info_card = self._make_info_card("USB", "Не подключён")
         self._usb_display = usb_info_card.findChild(QLabel, "infoValue")
         info_grid.addWidget(usb_info_card, 0, 3)
@@ -314,19 +517,16 @@ class ColdVaultMainWindow(QMainWindow):
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
 
-        # Форма
         form_card = QFrame()
         form_card.setObjectName("card")
         form_layout = QVBoxLayout(form_card)
         form_layout.setSpacing(14)
 
-        # Адрес получателя
         form_layout.addWidget(self._make_field_label("Адрес получателя"))
         self._to_input = QLineEdit()
         self._to_input.setPlaceholderText("0x...")
         form_layout.addWidget(self._to_input)
 
-        # Сумма
         form_layout.addWidget(self._make_field_label("Сумма (ETH)"))
         self._amount_input = QDoubleSpinBox()
         self._amount_input.setDecimals(8)
@@ -334,7 +534,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._amount_input.setSingleStep(0.01)
         form_layout.addWidget(self._amount_input)
 
-        # Gas настройки
         gas_group = QFrame()
         gas_group.setObjectName("card")
         gas_layout = QVBoxLayout(gas_group)
@@ -351,14 +550,12 @@ class ColdVaultMainWindow(QMainWindow):
         gas_header.addWidget(self._btn_fetch_gas)
         gas_layout.addLayout(gas_header)
 
-        # Тип транзакции
         gas_layout.addWidget(self._make_field_label("Тип"))
         self._tx_type_combo = QComboBox()
         self._tx_type_combo.addItems(["EIP-1559 (рекомендуется)", "Legacy"])
         self._tx_type_combo.currentIndexChanged.connect(self._on_tx_type_changed)
         gas_layout.addWidget(self._tx_type_combo)
 
-        # EIP-1559 fields
         self._eip1559_widget = QWidget()
         eip_layout = QGridLayout(self._eip1559_widget)
         eip_layout.setContentsMargins(0, 0, 0, 0)
@@ -379,7 +576,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         gas_layout.addWidget(self._eip1559_widget)
 
-        # Legacy field
         self._legacy_widget = QWidget()
         legacy_layout = QVBoxLayout(self._legacy_widget)
         legacy_layout.setContentsMargins(0, 0, 0, 0)
@@ -392,7 +588,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._legacy_widget.hide()
         gas_layout.addWidget(self._legacy_widget)
 
-        # Gas limit
         gas_layout.addWidget(self._make_field_label("Gas Limit"))
         self._gas_limit_input = QDoubleSpinBox()
         self._gas_limit_input.setDecimals(0)
@@ -402,10 +597,8 @@ class ColdVaultMainWindow(QMainWindow):
         gas_layout.addWidget(self._gas_limit_input)
 
         form_layout.addWidget(gas_group)
-
         layout.addWidget(form_card)
 
-        # Кнопки
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
 
@@ -418,7 +611,6 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         layout.addStretch()
 
-        # Оборачиваем в scroll
         wrapper = QWidget()
         wrapper_layout = QVBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
@@ -426,7 +618,6 @@ class ColdVaultMainWindow(QMainWindow):
         return wrapper
 
     def _build_sign_page(self) -> QWidget:
-        """Страница для broadcast подписанных TX."""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(40, 30, 40, 30)
@@ -442,7 +633,6 @@ class ColdVaultMainWindow(QMainWindow):
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
 
-        # Список signed TX
         self._signed_list_widget = QVBoxLayout()
         signed_card = QFrame()
         signed_card.setObjectName("card")
@@ -456,7 +646,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addWidget(signed_card)
 
-        # Кнопки
         btn_layout = QHBoxLayout()
 
         self._btn_scan_signed = QPushButton("Сканировать USB")
@@ -466,7 +655,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(btn_layout)
 
-        # Лог
         self._broadcast_log = QTextEdit()
         self._broadcast_log.setReadOnly(True)
         self._broadcast_log.setMaximumHeight(200)
@@ -486,7 +674,6 @@ class ColdVaultMainWindow(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        # Сеть
         net_card = QFrame()
         net_card.setObjectName("card")
         net_layout = QVBoxLayout(net_card)
@@ -509,7 +696,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addWidget(net_card)
 
-        # USB вручную
         usb_card = QFrame()
         usb_card.setObjectName("card")
         usb_layout = QVBoxLayout(usb_card)
@@ -533,7 +719,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addWidget(usb_card)
 
-        # Безопасность
         sec_card = QFrame()
         sec_card.setObjectName("card")
         sec_layout = QVBoxLayout(sec_card)
@@ -586,7 +771,6 @@ class ColdVaultMainWindow(QMainWindow):
             self._set_usb_status(False, "USB не обнаружен")
             return
 
-        # Ищем USB с ColdVault
         for drive in drives:
             vault = Path(drive["path"]) / "ColdVault" / "wallet.vault"
             if vault.exists():
@@ -595,7 +779,6 @@ class ColdVaultMainWindow(QMainWindow):
                 self._unlock_wallet_dialog()
                 return
 
-        # Если ColdVault не найден, берём первый USB
         d = drives[0]
         self._set_usb_status(False, f"{d['label']} (нет кошелька)")
 
@@ -613,7 +796,6 @@ class ColdVaultMainWindow(QMainWindow):
                 self._usb_display.setText(info)
 
     def _unlock_wallet_dialog(self):
-        """Диалог ввода пароля для разблокировки."""
         from PyQt6.QtWidgets import QInputDialog
         password, ok = QInputDialog.getText(
             self, "ColdVault — Разблокировка",
@@ -632,7 +814,6 @@ class ColdVaultMainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def _connect_network(self):
-        """Подключение к сети и загрузка данных."""
         if self._eth.connect():
             self._refresh_balance()
             self._fetch_gas_prices()
@@ -685,11 +866,9 @@ class ColdVaultMainWindow(QMainWindow):
     # ─── Создание TX ─── #
 
     def _create_unsigned_tx(self):
-        """Создаёт unsigned TX и сохраняет на USB."""
         if not self._address:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован")
             return
-
         if not self._usb_connected:
             QMessageBox.warning(self, "Ошибка", "USB не подключён")
             return
@@ -714,16 +893,13 @@ class ColdVaultMainWindow(QMainWindow):
             )
 
             if self._tx_type_combo.currentIndex() == 0:
-                # EIP-1559
                 tx.max_fee_per_gas = EthNetwork.gwei_to_wei(self._max_fee_input.value())
                 tx.max_priority_fee_per_gas = EthNetwork.gwei_to_wei(self._priority_fee_input.value())
             else:
-                # Legacy
                 tx.gas_price = EthNetwork.gwei_to_wei(self._gas_price_input.value())
 
             tx.validate()
 
-            # Сериализация
             tx_json = TransactionSigner.serialize_unsigned_tx(tx)
             filename = f"tx_{self._current_nonce}_{int(time.time())}.json"
             path = self._usb.save_pending_tx(tx_json, filename)
@@ -734,7 +910,6 @@ class ColdVaultMainWindow(QMainWindow):
                 f"Перенесите USB на офлайн-ПК для подписи."
             )
 
-            # Очистка формы
             self._to_input.clear()
             self._amount_input.setValue(0)
 
@@ -744,12 +919,10 @@ class ColdVaultMainWindow(QMainWindow):
     # ─── Broadcast signed TX ─── #
 
     def _scan_signed_txs(self):
-        """Сканирует USB на подписанные TX."""
         if not self._usb_connected:
             QMessageBox.warning(self, "Ошибка", "USB не подключён")
             return
 
-        # Очищаем старый список
         while self._signed_list_widget.count():
             item = self._signed_list_widget.takeAt(0)
             if item.widget():
@@ -780,7 +953,6 @@ class ColdVaultMainWindow(QMainWindow):
             self._signed_list_widget.addWidget(wrapper)
 
     def _broadcast_signed(self, filename: str):
-        """Отправляет подписанную TX в сеть."""
         if not self._eth.is_connected:
             if not self._eth.connect():
                 QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к сети")
@@ -871,3 +1043,16 @@ class ColdVaultMainWindow(QMainWindow):
     def closeEvent(self, event):
         self._km.clear()
         event.accept()
+
+
+# ─── Вспомогательная функция: PIL Image → QPixmap ─── #
+
+def _pil_to_pixmap(pil_img) -> QPixmap:
+    """Конвертирует PIL Image в QPixmap для отображения в PyQt6."""
+    import io
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    buf.seek(0)
+    qimg = QImage()
+    qimg.loadFromData(buf.read())
+    return QPixmap.fromImage(qimg)
