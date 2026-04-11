@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -730,21 +731,26 @@ class ColdVaultMainWindow(QMainWindow):
             self._pending_list_widget.addWidget(wrapper)
 
     def _sign_pending_tx(self, filename: str):
-        # Проверяем что кошелёк разблокирован
-        private_key = self._km.private_key
-        if not private_key:
+        # 1. Проверяем наличие ключа
+        raw_key = self._km.private_key
+        if not raw_key:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
             return
+
+        # 2. Явно конвертируем в bytes (HexBytes → bytes)
+        private_key: bytes = bytes(raw_key)
+
         try:
+            # 3. Читаем и парсим JSON транзакции
             tx_json = self._usb.read_pending_tx(filename)
-            # Читаем данные для отображения в диалоге подтверждения
             tx_data = json.loads(tx_json)
-            tx_inner = tx_data.get("tx", tx_data)  # поддержка обоих форматов
+            tx_inner = tx_data.get("tx", tx_data)
             to = tx_inner.get("to", "?")
             value_wei = int(tx_inner.get("value_wei", tx_inner.get("value", 0)))
             value_eth = value_wei / 10 ** 18
             nonce = tx_inner.get("nonce", "?")
 
+            # 4. Диалог подтверждения
             confirm = QMessageBox.question(
                 self,
                 "Подтвердите подпись",
@@ -757,13 +763,16 @@ class ColdVaultMainWindow(QMainWindow):
             if confirm != QMessageBox.StandardButton.Yes:
                 return
 
-            # Десериализуем и подписываем — правильный порядок аргументов!
+            # 5. Десериализуем TransactionRequest
             tx_req = TransactionSigner.deserialize_unsigned_tx(tx_json)
+
+            # 6. Подписываем — передаём чистый bytes
             signed_hex = TransactionSigner.sign_transaction(
                 private_key=private_key,
                 tx_request=tx_req,
             )
 
+            # 7. Сохраняем подписанную TX
             signed_filename = filename.replace(".json", "_signed.json")
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
             self._usb.delete_pending_tx(filename)
@@ -778,7 +787,14 @@ class ColdVaultMainWindow(QMainWindow):
             self._scan_signed_txs()
 
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка подписи", str(e))
+            # Показываем полный traceback в логе и диалоге — не теряем ошибку
+            tb = traceback.format_exc()
+            if hasattr(self, '_broadcast_log'):
+                self._broadcast_log.append(f"[!] Ошибка подписи:\n{tb}")
+            QMessageBox.critical(
+                self, "Ошибка подписи",
+                f"{e}\n\nПодробности:\n{tb}"
+            )
 
     # ─── Broadcast signed ─── #
 
