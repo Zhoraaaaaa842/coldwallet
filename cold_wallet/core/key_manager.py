@@ -45,36 +45,31 @@ class KeyManager:
     def mnemonic(self) -> Optional[str]:
         return self._mnemonic
 
+    @property
+    def private_key(self) -> Optional[bytes]:
+        """Приватный ключ (bytes) или None если кошелёк не разблокирован."""
+        return self._private_key
+
     def generate_wallet(self) -> Tuple[str, str]:
         """
         Генерирует новый ETH-кошелёк.
         Возвращает (mnemonic, address).
-        
         Мнемоника — 24 слова (256 бит энтропии).
         Деривация по BIP-44: m/44'/60'/0'/0/0
         """
-        # 256 бит энтропии = 24 слова
         self._mnemonic = self._mnemo.generate(strength=256)
-
-        # Деривация ключа по BIP-44 стандарту для Ethereum
         acct = Account.from_mnemonic(
             self._mnemonic,
             account_path="m/44'/60'/0'/0/0"
         )
-
         self._private_key = acct.key
         self._address = acct.address
-
         return self._mnemonic, self._address
 
     def import_from_mnemonic(self, mnemonic: str) -> str:
-        """
-        Импорт кошелька из мнемонической фразы.
-        Возвращает адрес.
-        """
+        """Импорт кошелька из мнемонической фразы. Возвращает адрес."""
         if not self._mnemo.check(mnemonic):
             raise ValueError("Неверная мнемоническая фраза")
-
         self._mnemonic = mnemonic
         acct = Account.from_mnemonic(
             mnemonic,
@@ -82,26 +77,19 @@ class KeyManager:
         )
         self._private_key = acct.key
         self._address = acct.address
-
         return self._address
 
     def import_from_private_key(self, private_key_hex: str) -> str:
-        """
-        Импорт кошелька из приватного ключа (hex).
-        Возвращает адрес.
-        """
+        """Импорт кошелька из приватного ключа (hex). Возвращает адрес."""
         if private_key_hex.startswith("0x"):
             private_key_hex = private_key_hex[2:]
-
         pk_bytes = bytes.fromhex(private_key_hex)
         if len(pk_bytes) != 32:
             raise ValueError("Приватный ключ должен быть 32 байта")
-
         acct = Account.from_key(pk_bytes)
         self._private_key = acct.key
         self._address = acct.address
         self._mnemonic = None
-
         return self._address
 
     def _derive_encryption_key(self, password: str, salt: bytes) -> bytes:
@@ -117,7 +105,6 @@ class KeyManager:
     def encrypt_and_save(self, password: str, filepath: str) -> None:
         """
         Шифрует приватный ключ AES-256-GCM и сохраняет в файл.
-        
         Формат файла (JSON):
         {
             "version": 1,
@@ -136,17 +123,12 @@ class KeyManager:
         nonce = secrets.token_bytes(NONCE_SIZE)
         enc_key = self._derive_encryption_key(password, salt)
 
-        # Данные для шифрования: приватный ключ + опционально мнемоника
-        payload = {
-            "private_key": self._private_key.hex(),
-        }
+        payload = {"private_key": self._private_key.hex()}
         if self._mnemonic:
             payload["mnemonic"] = self._mnemonic
 
         plaintext = json.dumps(payload).encode("utf-8")
-
         aesgcm = AESGCM(enc_key)
-        # AAD (Additional Authenticated Data) — адрес для защиты целостности
         aad = self._address.encode("utf-8") if self._address else None
         ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
 
@@ -160,18 +142,13 @@ class KeyManager:
             "has_mnemonic": self._mnemonic is not None,
         }
 
-        # Атомарная запись — сначала во временный файл
         tmp_path = filepath + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(wallet_data, f, indent=2)
-
         os.replace(tmp_path, filepath)
 
     def decrypt_and_load(self, password: str, filepath: str) -> str:
-        """
-        Загружает и дешифрует кошелёк из файла.
-        Возвращает адрес.
-        """
+        """Загружает и дешифрует кошелёк из файла. Возвращает адрес."""
         with open(filepath, "r", encoding="utf-8") as f:
             wallet_data = json.load(f)
 
@@ -184,7 +161,6 @@ class KeyManager:
         address = wallet_data["address"]
         iterations = wallet_data.get("iterations", PBKDF2_ITERATIONS)
 
-        # Деривация ключа с сохранёнными параметрами
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=KEY_SIZE,
@@ -202,12 +178,10 @@ class KeyManager:
             raise ValueError("Неверный пароль или повреждённый файл кошелька")
 
         payload = json.loads(plaintext.decode("utf-8"))
-
         self._private_key = bytes.fromhex(payload["private_key"])
         self._address = address
         self._mnemonic = payload.get("mnemonic")
 
-        # Верификация: адрес из ключа совпадает с сохранённым
         acct = Account.from_key(self._private_key)
         if acct.address.lower() != address.lower():
             self.clear()
@@ -224,8 +198,6 @@ class KeyManager:
     def clear(self) -> None:
         """Безопасная очистка ключей из памяти."""
         if self._private_key is not None:
-            # Перезаписываем байты нулями перед удалением
-            # (Python не гарантирует, но снижает риск)
             self._private_key = b'\x00' * 32
         self._private_key = None
         self._address = None

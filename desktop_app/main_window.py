@@ -613,7 +613,6 @@ class ColdVaultMainWindow(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        # ─── Секция 1: Подпись неподписанных ─── #
         pending_title = QLabel("⯊ ШАГ 1 — Подписать транзакцию (pending → signed)")
         pending_title.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; padding: 4px 0;"
@@ -647,13 +646,11 @@ class ColdVaultMainWindow(QMainWindow):
         btn_scan_pending.clicked.connect(self._scan_pending_txs)
         layout.addWidget(btn_scan_pending)
 
-        # ─── Делитель ─── #
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
         divider.setStyleSheet(f"color: {COLORS.get('border', '#333')};")
         layout.addWidget(divider)
 
-        # ─── Секция 2: Broadcast подписанных ─── #
         signed_title = QLabel("▶ ШАГ 2 — Отправить подписанную транзакцию в сеть")
         signed_title.setStyleSheet(
             f"color: {COLORS.get('success', '#4caf50')}; font-size: 15px; font-weight: 700; padding: 4px 0;"
@@ -733,17 +730,20 @@ class ColdVaultMainWindow(QMainWindow):
             self._pending_list_widget.addWidget(wrapper)
 
     def _sign_pending_tx(self, filename: str):
-        if not self._km.private_key:
+        # Проверяем что кошелёк разблокирован
+        private_key = self._km.private_key
+        if not private_key:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
             return
         try:
             tx_json = self._usb.read_pending_tx(filename)
+            # Читаем данные для отображения в диалоге подтверждения
             tx_data = json.loads(tx_json)
-
-            to = tx_data.get("to", "?")
-            value_wei = int(tx_data.get("value", 0))
-            value_eth = value_wei / 10**18
-            nonce = tx_data.get("nonce", "?")
+            tx_inner = tx_data.get("tx", tx_data)  # поддержка обоих форматов
+            to = tx_inner.get("to", "?")
+            value_wei = int(tx_inner.get("value_wei", tx_inner.get("value", 0)))
+            value_eth = value_wei / 10 ** 18
+            nonce = tx_inner.get("nonce", "?")
 
             confirm = QMessageBox.question(
                 self,
@@ -757,12 +757,15 @@ class ColdVaultMainWindow(QMainWindow):
             if confirm != QMessageBox.StandardButton.Yes:
                 return
 
+            # Десериализуем и подписываем — правильный порядок аргументов!
             tx_req = TransactionSigner.deserialize_unsigned_tx(tx_json)
-            signed_hex = TransactionSigner.sign_transaction(tx_req, self._km.private_key)
+            signed_hex = TransactionSigner.sign_transaction(
+                private_key=private_key,
+                tx_request=tx_req,
+            )
 
             signed_filename = filename.replace(".json", "_signed.json")
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
-
             self._usb.delete_pending_tx(filename)
 
             self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
