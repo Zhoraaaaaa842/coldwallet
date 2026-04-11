@@ -14,6 +14,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
+try:
+    import urllib.request as _urllib_req
+except ImportError:
+    _urllib_req = None
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QPushButton, QLabel, QLineEdit, QFrame, QMessageBox, QFileDialog,
@@ -37,6 +42,34 @@ from cold_wallet.storage.usb_manager import USBManager
 from desktop_app.styles import (
     MAIN_STYLESHEET, COLORS, CARD_BALANCE_STYLE, ETH_ICON_STYLE
 )
+
+
+# ─── Поток получения цены ETH в рублях (CoinGecko) ─── #
+
+class PriceWorker(QThread):
+    price_ready = pyqtSignal(float)  # цена 1 ETH в RUB
+    error = pyqtSignal(str)
+
+    COINGECKO_URL = (
+        "https://api.coingecko.com/api/v3/simple/price"
+        "?ids=ethereum&vs_currencies=rub"
+    )
+
+    def run(self):
+        try:
+            if _urllib_req is None:
+                self.error.emit("urllib недоступен")
+                return
+            req = _urllib_req.Request(
+                self.COINGECKO_URL,
+                headers={"User-Agent": "ZhoraWallet/1.0"},
+            )
+            with _urllib_req.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+            price = float(data["ethereum"]["rub"])
+            self.price_ready.emit(price)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 # ─── Фоновые потоки ─── #
@@ -111,7 +144,7 @@ class NetworkWorker(QThread):
 # ─── Виджет одной транзакции (редизайн) ─── #
 
 class TxItemWidget(QFrame):
-    def __init__(self, tx: dict, my_address: str, parent=None):
+    def __init__(self, tx: dict, my_address: str, eth_price_rub: float = 0.0, parent=None):
         super().__init__(parent)
         self.tx = tx
         self.setObjectName("txCard")
@@ -177,10 +210,10 @@ class TxItemWidget(QFrame):
         info.addWidget(time_lbl)
         layout.addLayout(info, 1)
 
-        # Правый блок: сумма + статус
+        # Правый блок: сумма ETH + сумма RUB + статус
         right = QVBoxLayout()
         right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        right.setSpacing(4)
+        right.setSpacing(2)
 
         value_wei = int(tx.get("value", 0))
         value_eth = value_wei / 10**18
@@ -191,6 +224,16 @@ class TxItemWidget(QFrame):
         )
         amount_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right.addWidget(amount_lbl)
+
+        # Конвертация в рубли
+        if eth_price_rub > 0 and value_eth > 0:
+            rub_val = value_eth * eth_price_rub
+            rub_lbl = QLabel(f"≈ {rub_val:,.2f} ₽".replace(",", " "))
+            rub_lbl.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 500;"
+            )
+            rub_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            right.addWidget(rub_lbl)
 
         # Подтверждение
         status_row = QHBoxLayout()
@@ -254,8 +297,13 @@ class ColdVaultMainWindow(QMainWindow):
         self._gas_worker = NetworkWorker(self._eth)
         self._tx_worker = NetworkWorker(self._eth)
         self._history_worker = NetworkWorker(self._eth)
+        self._price_worker = PriceWorker()
+        self._price_worker.price_ready.connect(self._on_price_ready)
+        self._price_worker.error.connect(lambda e: None)  # тихо игнорируем ошибку цены
+
         self._address: Optional[str] = None
         self._balance_eth = "0"
+        self._eth_price_rub: float = 0.0  # актуальный курс ETH/RUB
         self._current_nonce = 0
         self._usb_connected = False
         self._usb_display = None
@@ -270,6 +318,26 @@ class ColdVaultMainWindow(QMainWindow):
         self._connect_signals()
 
         QTimer.singleShot(500, self._detect_usb)
+        # Получаем курс сразу при запуске, затем каждые 3 минуты
+        QTimer.singleShot(1000, self._fetch_eth_price)
+        self._price_timer = QTimer(self)
+        self._price_timer.setInterval(180_000)  # 3 минуты
+        self._price_timer.timeout.connect(self._fetch_eth_price)
+        self._price_timer.start()
+
+    def _fetch_eth_price(self):
+        if not self._price_worker.isRunning():
+            self._price_worker.start()
+
+    def _on_price_ready(self, price_rub: float):
+        self._eth_price_rub = price_rub
+        # Обновляем отображение баланса с новым курсом
+        self._update_balance_display()
+        # Обновляем цену в карточке рынка
+        if hasattr(self, "_market_price_label"):
+            self._market_price_label.setText(
+                f"{price_rub:,.2f} ₽".replace(",", " ")
+            )
 
     def _build_ui(self):
         central = QWidget()
@@ -372,7 +440,7 @@ class ColdVaultMainWindow(QMainWindow):
         balance_card = QFrame()
         balance_card.setStyleSheet(CARD_BALANCE_STYLE)
         bc_layout = QVBoxLayout(balance_card)
-        bc_layout.setSpacing(6)
+        bc_layout.setSpacing(4)
         bc_layout.setContentsMargins(28, 24, 28, 24)
 
         # Строка: иконка ETH + сеть
@@ -389,20 +457,39 @@ class ColdVaultMainWindow(QMainWindow):
         top_row.addWidget(net_badge)
         bc_layout.addLayout(top_row)
 
-        # Заголовок баланса — крупный и явный
+        # Метка «Баланс»
         bal_title = QLabel("Баланс")
         bal_title.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 16px; font-weight: 700;"
-            f" letter-spacing: 0.5px; margin-top: 10px;"
+            f"color: {COLORS['text_muted']}; font-size: 14px; font-weight: 600;"
+            f" letter-spacing: 0.5px; margin-top: 12px;"
         )
         bc_layout.addWidget(bal_title)
 
-        # Крупная сумма ETH
+        # ── КРУПНАЯ СУММА В РУБЛЯХ (главный акцент, как на референсе) ──
+        self._balance_rub_label = QLabel("— ₽")
+        self._balance_rub_label.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 46px; font-weight: 800;"
+            f" letter-spacing: -1px; line-height: 1;"
+        )
+        bc_layout.addWidget(self._balance_rub_label)
+
+        # Под ней — сумма в ETH (вторичная, серая, мельче)
         self._balance_label = QLabel("—")
         self._balance_label.setObjectName("balanceLabel")
+        self._balance_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 16px; font-weight: 500;"
+            f" margin-top: 2px;"
+        )
         bc_layout.addWidget(self._balance_label)
 
-        # Адрес (кликабельный) — без дублирующего баланса
+        # Курс ETH/RUB — мелко под балансом
+        self._market_price_label = QLabel("Загрузка курса…")
+        self._market_price_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; margin-top: 6px;"
+        )
+        bc_layout.addWidget(self._market_price_label)
+
+        # Адрес (кликабельный)
         self._address_label = QLabel("Подключите USB для начала работы")
         self._address_label.setObjectName("addressLabel")
         self._address_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -410,7 +497,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._address_label.mousePressEvent = self._copy_address
         self._address_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 13px;"
-            f" font-family: Consolas, monospace; margin-top: 6px;"
+            f" font-family: Consolas, monospace; margin-top: 8px;"
         )
         bc_layout.addWidget(self._address_label)
 
@@ -557,6 +644,37 @@ class ColdVaultMainWindow(QMainWindow):
         outer_layout.addWidget(scroll)
         return outer
 
+    # ─── Обновление отображения баланса с конвертацией ─── #
+
+    def _update_balance_display(self):
+        """Пересчитывает и обновляет оба лейбла баланса (RUB + ETH)."""
+        eth_str = self._balance_eth  # строка, напр. "0.00197903"
+        try:
+            eth_val = float(eth_str)
+        except (ValueError, TypeError):
+            eth_val = 0.0
+
+        # ETH-строка
+        self._balance_label.setText(f"{eth_val:.8f} ETH")
+
+        # RUB-строка
+        if self._eth_price_rub > 0:
+            rub_val = eth_val * self._eth_price_rub
+            # Форматируем: "362,19 ₽" — целая часть крупно, дробная мельче
+            rub_int = int(rub_val)
+            rub_dec = round((rub_val - rub_int) * 100)
+            rub_int_fmt = f"{rub_int:,}".replace(",", " ")  # разряды через пробел
+            self._balance_rub_label.setText(f"{rub_int_fmt},{rub_dec:02d} ₽")
+
+            # Обновляем подпись курса
+            price_fmt = f"{self._eth_price_rub:,.0f}".replace(",", " ")
+            self._market_price_label.setText(
+                f"Рыночная цена ETH · {price_fmt} ₽"
+            )
+        else:
+            self._balance_rub_label.setText("— ₽")
+            self._market_price_label.setText("Загрузка курса…")
+
     # ─── Чип-фильтр ─── #
 
     def _make_chip(self, text: str, active: bool) -> QPushButton:
@@ -651,7 +769,8 @@ class ColdVaultMainWindow(QMainWindow):
             )
             self._tx_container.addWidget(sep)
             for tx in group:
-                item = TxItemWidget(tx, self._address or "")
+                # Передаём актуальный курс в виджет транзакции
+                item = TxItemWidget(tx, self._address or "", self._eth_price_rub)
                 self._tx_container.addWidget(item)
 
     def _load_tx_history(self):
