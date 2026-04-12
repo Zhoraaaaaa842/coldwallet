@@ -78,7 +78,7 @@ class NetworkWorker(QThread):
     balance_ready = pyqtSignal(dict)
     gas_ready = pyqtSignal(dict)
     nonce_ready = pyqtSignal(int)
-    tx_sent = pyqtSignal(str)
+    tx_sent = pyqtSignal(dict)   # FIX: было str, теперь dict со статусом TX
     tx_history_ready = pyqtSignal(list)
     error = pyqtSignal(str)
 
@@ -129,8 +129,9 @@ class NetworkWorker(QThread):
                 result = self._eth.get_nonce(self._params["address"])
                 self.nonce_ready.emit(result)
             elif self._task == "send_tx":
-                tx_hash = self._eth.broadcast_transaction(self._params["raw_tx"])
-                self.tx_sent.emit(tx_hash)
+                # FIX: broadcast_transaction теперь возвращает dict, а не str
+                result = self._eth.broadcast_transaction(self._params["raw_tx"])
+                self.tx_sent.emit(result)
             elif self._task == "tx_history":
                 try:
                     txs = self._eth.get_transaction_history(self._params["address"])
@@ -1528,10 +1529,8 @@ class ColdVaultMainWindow(QMainWindow):
         try:
             use_eip1559 = self._tx_type_combo.currentIndex() == 0
 
-            # Конвертация ETH → Wei
             value_wei = int(amount_eth * 10**18)
 
-            # Конвертация Gwei → Wei
             if use_eip1559:
                 max_fee_per_gas = int(self._max_fee_input.value() * 10**9)
                 max_priority_fee_per_gas = int(self._priority_fee_input.value() * 10**9)
@@ -1576,13 +1575,55 @@ class ColdVaultMainWindow(QMainWindow):
             lambda e: self._broadcast_log.append(f"[!] {e}") if hasattr(self, '_broadcast_log') else None
         )
 
-    def _on_tx_sent(self, tx_hash: str):
-        if hasattr(self, '_broadcast_log'):
-            self._broadcast_log.append(f"[✓] TX отправлена: {tx_hash}")
-        QMessageBox.information(
-            self, "Транзакция отправлена",
-            f"Hash: {tx_hash}\n\nПроверьте на Etherscan."
-        )
+    def _on_tx_sent(self, result: dict):
+        """
+        FIX: обработка реального статуса транзакции.
+        result = {tx_hash, status, block, gas_used, error}
+        """
+        tx_hash = result.get("tx_hash", "")
+        status = result.get("status")
+        block = result.get("block")
+        gas_used = result.get("gas_used")
+        error = result.get("error")
+
+        if status == 1:
+            # Транзакция подтверждена в блокчейне
+            msg = (
+                f"Hash: {tx_hash}\n"
+                f"Блок: {block}\n"
+                f"Gas использован: {gas_used}\n\n"
+                f"Проверьте на Etherscan."
+            )
+            if hasattr(self, '_broadcast_log'):
+                self._broadcast_log.append(f"[✓] TX подтверждена в блоке {block}: {tx_hash}")
+            QMessageBox.information(self, "✓ Транзакция подтверждена", msg)
+
+        elif status == 0:
+            # TX попала в блок, но была reverted
+            msg = (
+                f"Hash: {tx_hash}\n"
+                f"Блок: {block}\n\n"
+                f"Транзакция отклонена (revert). Возможные причины:\n"
+                f"• Недостаточно ETH на балансе\n"
+                f"• Неверный gas limit\n"
+                f"• Ошибка в логике контракта"
+            )
+            if hasattr(self, '_broadcast_log'):
+                self._broadcast_log.append(f"[✗] TX reverted в блоке {block}: {tx_hash}")
+            QMessageBox.warning(self, "✗ Транзакция отклонена", msg)
+
+        else:
+            # status=None: таймаут или ошибка — TX в mempool, но не подтверждена
+            msg = (
+                f"Hash: {tx_hash}\n\n"
+                f"TX отправлена в сеть, но подтверждения нет (timeout 120с).\n"
+                f"Проверьте вручную на Etherscan.\n"
+            )
+            if error:
+                msg += f"\nДетали: {error}"
+            if hasattr(self, '_broadcast_log'):
+                self._broadcast_log.append(f"[?] TX в mempool (нет подтверждения): {tx_hash}")
+            QMessageBox.warning(self, "⚠ Ожидание подтверждения", msg)
 
 
 def _pil_to_pixmap(pil_image) -> QPixmap:
