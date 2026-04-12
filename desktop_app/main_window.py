@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QFrame, QMessageBox, QFileDialog,
     QComboBox, QDoubleSpinBox, QTextEdit, QSpacerItem, QSizePolicy,
     QApplication, QProgressBar, QGroupBox, QGridLayout, QScrollArea,
-    QInputDialog, QButtonGroup
+    QInputDialog, QButtonGroup, QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QFont, QIcon, QClipboard, QPixmap, QImage
@@ -1447,35 +1447,79 @@ class ColdVaultMainWindow(QMainWindow):
         """
         Загружает кошелёк с USB.
         drive_path — строка-путь к корню USB (напр. "E:\\" или "/media/usb").
-        Ищет файл ColdVault/wallet.vault и читает адрес из него.
-        Если файл есть — запрашивает пароль для разблокировки.
+        Если wallet.vault найден — запрашивает пароль и вызывает decrypt_and_load().
+        Без правильного пароля кошелёк НЕ открывается.
         """
         try:
             self._usb.set_usb_path(drive_path)
 
             if not self._usb.is_initialized:
-                # Кошелёк ещё не создан на этой флешке — можно инициализировать
+                # Кошелёк ещё не создан на этой флешке
                 return
 
             wallet_file = str(self._usb.wallet_file)
 
-            # Читаем адрес из vault-файла без расшифровки приватного ключа
-            import json as _json
-            with open(wallet_file, "r", encoding="utf-8") as f:
-                wallet_data = _json.load(f)
-            address = wallet_data.get("address")
+            # ── Запрос пароля (до 3 попыток) ──
+            address = self._unlock_wallet(wallet_file)
+            if address is None:
+                # Пользователь отменил или исчерпал попытки
+                return
 
-            if address:
-                self._address = address
-                short = address[:10] + "…" + address[-8:]
-                self._address_label.setText(short)
-                self._btn_refresh.setEnabled(True)
-                self._btn_create_tx.setEnabled(True)
-                self._refresh_balance()
-                self._load_tx_history()
+            self._address = address
+            short = address[:10] + "…" + address[-8:]
+            self._address_label.setText(short)
+            self._btn_refresh.setEnabled(True)
+            self._btn_create_tx.setEnabled(True)
+            self._refresh_balance()
+            self._load_tx_history()
 
-        except Exception:
-            pass
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка загрузки кошелька", str(e))
+
+    def _unlock_wallet(self, wallet_file: str, max_attempts: int = 3) -> Optional[str]:
+        """
+        Показывает диалог ввода пароля и вызывает KeyManager.decrypt_and_load().
+        Возвращает адрес при успехе, None при отмене или исчерпании попыток.
+        """
+        for attempt in range(1, max_attempts + 1):
+            hint = "" if attempt == 1 else f"  (попытка {attempt} из {max_attempts})"
+            password, ok = QInputDialog.getText(
+                self,
+                "Разблокировка кошелька",
+                f"Введите пароль для кошелька на USB:{hint}",
+                QLineEdit.EchoMode.Password,
+            )
+
+            if not ok or not password:
+                # Пользователь нажал «Отмена»
+                QMessageBox.information(
+                    self,
+                    "Кошелёк заблокирован",
+                    "Кошелёк не разблокирован. Подключите USB и перезапустите приложение."
+                )
+                return None
+
+            try:
+                address = self._km.decrypt_and_load(password, wallet_file)
+                return address
+            except ValueError:
+                remaining = max_attempts - attempt
+                if remaining > 0:
+                    QMessageBox.warning(
+                        self,
+                        "Неверный пароль",
+                        f"Неверный пароль. Осталось попыток: {remaining}."
+                    )
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Доступ заблокирован",
+                        "Превышено количество попыток ввода пароля.\n"
+                        "Перезапустите приложение и попробуйте снова."
+                    )
+                    return None
+
+        return None
 
     def _refresh_balance(self):
         if not self._address:
