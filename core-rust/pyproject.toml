@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "coldvault-core"
+version = "0.1.0"
+description = "Rust crypto core для ZhoraWallet ETH cold wallet"
+requires-python = ">=3.10"
+
+[tool.maturin]
+# Путь к Cargo.toml относительно pyproject.toml
+manifest-path = "Cargo.toml"
+# Имя Python-модуля
+module-name = "coldvault_core"
+features = ["pyo3/extension-module"]

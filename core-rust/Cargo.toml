@@ -1,0 +1,63 @@
+[package]
+name = "coldvault-core"
+version = "0.1.0"
+edition = "2021"
+# Имя модуля, который увидит Python: import coldvault_core
+
+[lib]
+name = "coldvault_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# ──────────────────────────────────────────────────────────────
+# PyO3 — биндинги Python ↔ Rust
+pyo3 = { version = "0.21", features = ["extension-module"] }
+
+# ──────────────────────────────────────────────────────────────
+# Криптография
+
+# BIP-39 мнемоника (24 слова, 256 бит)
+tiny-bip39 = "1.0"
+
+# HD деривация m/44'/60'/0'/0/0
+coins-bip32 = "0.9"
+bip32 = "0.5"                  # ChildNumber, DerivationPath
+
+# ECDSA + secp256k1 (подпись транзакций)
+k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"] }
+elliptic-curve = "0.13"
+
+# AES-256-GCM шифрование vault-файла
+aes-gcm = "0.10"
+
+# PBKDF2-SHA256 (600 000 итераций)
+pbkdf2 = { version = "0.12", features = ["simple"] }
+sha2 = "0.10"
+hmac = "0.12"
+
+# Безопасная зачистка секретов из памяти
+zeroize = { version = "1.7", features = ["derive", "zeroize_derive"] }
+
+# Ethereum-специфика
+keccak256 = "0.10.2"           # eth_checksum_address, хэш адреса
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+rlp = "0.5"                    # RLP-кодирование транзакций
+
+# Вспомогательное
+hex = "0.4"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"   # меньше бинарник, нет stack-unwinding overhead
+
+# maturin использует этот профиль при `maturin develop`
+[profile.dev]
+opt-level = 1
