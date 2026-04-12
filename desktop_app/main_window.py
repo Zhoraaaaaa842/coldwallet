@@ -202,8 +202,11 @@ class TxItemWidget(QFrame):
 
         ts = tx.get("timeStamp") or tx.get("timestamp")
         if ts:
-            dt = datetime.datetime.fromtimestamp(int(ts))
-            time_str = dt.strftime("%H:%M")
+            try:
+                dt = datetime.datetime.fromtimestamp(int(ts))
+                time_str = dt.strftime("%H:%M")
+            except (OSError, ValueError, OverflowError):
+                time_str = ""
         else:
             time_str = tx.get("date", "")
         time_lbl = QLabel(time_str)
@@ -752,6 +755,10 @@ class ColdVaultMainWindow(QMainWindow):
         if not self._address:
             return
         self._history_worker._eth = self._eth
+        try:
+            self._history_worker.tx_history_ready.disconnect(self._on_tx_history_received)
+        except TypeError:
+            pass
         self._history_worker.tx_history_ready.connect(self._on_tx_history_received)
         self._history_worker.fetch_tx_history(self._address)
 
@@ -1277,10 +1284,8 @@ class ColdVaultMainWindow(QMainWindow):
                 return
 
             tx_req = TransactionSigner.deserialize_unsigned_tx(tx_json)
-            signed_hex = TransactionSigner.sign_transaction(
-                private_key=private_key,
-                tx_request=tx_req,
-            )
+            signer = TransactionSigner(private_key)
+            signed_hex = signer.sign_transaction(tx_req)
 
             signed_filename = filename.replace(".json", "_signed.json")
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
@@ -1474,10 +1479,18 @@ class ColdVaultMainWindow(QMainWindow):
             return
         if not self._eth.is_connected:
             self._eth.connect()
-        self._balance_worker.fetch_balance(self._address)
+        try:
+            self._balance_worker.balance_ready.disconnect(self._on_balance_ready)
+        except TypeError:
+            pass
         self._balance_worker.balance_ready.connect(self._on_balance_ready)
-        self._nonce_worker.fetch_nonce(self._address)
+        self._balance_worker.fetch_balance(self._address)
+        try:
+            self._nonce_worker.nonce_ready.disconnect(self._on_nonce_ready)
+        except TypeError:
+            pass
         self._nonce_worker.nonce_ready.connect(self._on_nonce_ready)
+        self._nonce_worker.fetch_nonce(self._address)
 
     def _on_balance_ready(self, data: dict):
         eth_val = data.get("eth", "0")
@@ -1492,8 +1505,12 @@ class ColdVaultMainWindow(QMainWindow):
     def _fetch_gas_prices(self):
         if not self._eth.is_connected:
             self._eth.connect()
-        self._gas_worker.fetch_gas()
+        try:
+            self._gas_worker.gas_ready.disconnect(self._on_gas_ready)
+        except TypeError:
+            pass
         self._gas_worker.gas_ready.connect(self._on_gas_ready)
+        self._gas_worker.fetch_gas()
 
     def _on_gas_ready(self, data: dict):
         base = data.get("base_fee_gwei", data.get("gas_price_gwei", 0))
@@ -1529,7 +1546,8 @@ class ColdVaultMainWindow(QMainWindow):
         try:
             use_eip1559 = self._tx_type_combo.currentIndex() == 0
 
-            value_wei = int(amount_eth * 10**18)
+            from decimal import Decimal
+            value_wei = int(Decimal(str(amount_eth)) * Decimal("1000000000000000000"))
 
             if use_eip1559:
                 max_fee_per_gas = int(self._max_fee_input.value() * 10**9)

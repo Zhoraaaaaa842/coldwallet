@@ -88,7 +88,8 @@ def _build_eip681_uri(
         uri += f"@{chain_id}"
     params = []
     if amount_eth and amount_eth > 0:
-        wei = int(amount_eth * 10 ** 18)
+        from decimal import Decimal
+        wei = int(Decimal(str(amount_eth)) * Decimal("1000000000000000000"))
         params.append(f"value={wei}")
     if label:
         params.append(f"label={label}")

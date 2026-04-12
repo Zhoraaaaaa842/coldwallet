@@ -197,6 +197,11 @@ else:
             _secure_zero(enc_key)
             return self._address
 
+        @property
+        def private_key(self) -> Optional[bytes]:
+            """Свойство для совместимости с GUI (main_window.py обращается к km.private_key)."""
+            return self._private_key
+
         def get_private_key(self) -> bytes:
             if self._private_key is None:
                 raise RuntimeError("Ключ не загружен")

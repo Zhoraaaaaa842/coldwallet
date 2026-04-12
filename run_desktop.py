@@ -2,9 +2,9 @@ import sys
 from PyQt6.QtWidgets import QApplication
 from desktop_app.main_window import ColdVaultMainWindow
 
-BANNER = """
- ____  _                                             
-|_  / | |_   ___   _ _   __ _   __ _   __ _   __ _ 
+BANNER = r"""
+ ____  _
+|_  / | |_   ___   _ _   __ _   __ _   __ _   __ _
  / /  | ' \ / _ \ | '_| / _` | / _` | / _` | / _` |
 /___|  |_||_|\___/ |_|   \__,_| \__,_| \__,_| \__,_|
 

@@ -265,10 +265,14 @@ class USBManager:
             p.unlink()
 
     def get_config(self) -> Dict:
+        if not self._vault_path:
+            return {}
         p = self._vault_path / CONFIG_FILE
-        return json.loads(p.read_text(encoding="utf-8")) if p and p.exists() else {}
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
     def update_config(self, updates: Dict) -> None:
+        if not self._vault_path:
+            raise RuntimeError("USB путь не установлен")
         config = self.get_config()
         config.update(updates)
         (self._vault_path / CONFIG_FILE).write_text(

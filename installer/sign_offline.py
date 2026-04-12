@@ -143,9 +143,8 @@ def main():
 
             # Десериализация и подпись
             tx_request = TransactionSigner.deserialize_unsigned_tx(tx_json)
-            raw_tx = TransactionSigner.sign_transaction(
-                km.get_private_key(), tx_request
-            )
+            signer = TransactionSigner(km.get_private_key())
+            raw_tx = signer.sign_transaction(tx_request)
 
             # Сохранение
             signed_dir.mkdir(exist_ok=True)
