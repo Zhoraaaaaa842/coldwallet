@@ -4,13 +4,14 @@
 //!   - KeyManager     — генерация/импорт ключей, шифрование vault-файла
 //!   - TransactionRequest — данные транзакции
 //!   - TransactionSigner  — подпись EIP-1559 и Legacy транзакций
+//!   - UsbManager     — безопасная работа с USB (path traversal защита)
 
 use pyo3::prelude::*;
 
-mod error;        // маппинг Rust-ошибок → Python exceptions
-mod key_manager;  // KeyManager
-mod transaction;  // TransactionRequest + TransactionSigner
-mod usb_manager;  // UsbManager (path traversal защита)
+pub mod error;
+pub mod key_manager;
+pub mod transaction;
+pub mod usb_manager;
 
 use key_manager::PyKeyManager;
 use transaction::{PyTransactionRequest, PyTransactionSigner};

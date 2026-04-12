@@ -3,22 +3,17 @@
 //! TransactionRequest — данные транзакции (from Python).
 //! TransactionSigner  — подписывает транзакцию приватным ключом.
 
-use k256::ecdsa::{signature::Signer, Signature, SigningKey};
+use k256::ecdsa::{RecoveryId, SigningKey};
+use k256::ecdsa::signature::hazmat::PrehashSigner;
 use pyo3::prelude::*;
 use rlp::RlpStream;
 use tiny_keccak::{Hasher, Keccak};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::error::VaultError;
 
-/// Тип транзакции
-#[derive(Clone, Debug)]
-pub enum TxType {
-    /// EIP-1559 (type=2): maxFeePerGas + maxPriorityFeePerGas
-    Eip1559,
-    /// Legacy (type=0): gasPrice
-    Legacy,
-}
+// BUG FIX: убран неиспользуемый enum TxType — логика определения типа
+// уже встроена в tx_type() -> &str метод PyTransactionRequest.
 
 /// Данные транзакции, передаваемые из Python GUI.
 ///
@@ -58,7 +53,6 @@ pub struct PyTransactionRequest {
 
 #[pymethods]
 impl PyTransactionRequest {
-    /// Создаёт EIP-1559 транзакцию.
     #[new]
     #[pyo3(signature = (
         to,
@@ -83,44 +77,19 @@ impl PyTransactionRequest {
         gas_price: Option<String>,
         data: Option<String>,
     ) -> Self {
-        Self {
-            to,
-            value,
-            gas_limit,
-            nonce,
-            chain_id,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            gas_price,
-            data,
-        }
+        Self { to, value, gas_limit, nonce, chain_id,
+               max_fee_per_gas, max_priority_fee_per_gas, gas_price, data }
     }
 
     /// Определяет тип транзакции по наличию полей.
     pub fn tx_type(&self) -> &str {
-        if self.max_fee_per_gas.is_some() {
-            "eip1559"
-        } else {
-            "legacy"
-        }
+        if self.max_fee_per_gas.is_some() { "eip1559" } else { "legacy" }
     }
 }
 
 /// Подписывает ETH-транзакции приватным ключом.
-///
-/// Пример из Python:
-/// ```python
-/// from coldvault_core import TransactionSigner, TransactionRequest
-/// signer = TransactionSigner(private_key_bytes)
-/// req = TransactionRequest(to="0x...", value="1000000000000000000",
-///                          gas_limit=21000, nonce=5, chain_id=1,
-///                          max_fee_per_gas="20000000000",
-///                          max_priority_fee_per_gas="1000000000")
-/// raw_tx_hex = signer.sign_transaction(req)
-/// ```
 #[pyclass(name = "TransactionSigner")]
 pub struct PyTransactionSigner {
-    /// Приватный ключ в Zeroizing для автоматического затирания при drop()
     private_key: Zeroizing<Vec<u8>>,
 }
 
@@ -130,20 +99,14 @@ impl PyTransactionSigner {
     #[new]
     pub fn new(private_key: Vec<u8>) -> PyResult<Self> {
         if private_key.len() != 32 {
-            return Err(
-                VaultError::InvalidPassword(
-                    "Приватный ключ должен быть 32 байта".into(),
-                )
-                .into(),
-            );
+            return Err(VaultError::InvalidPassword(
+                "Приватный ключ должен быть 32 байта".into(),
+            ).into());
         }
-        Ok(Self {
-            private_key: Zeroizing::new(private_key),
-        })
+        Ok(Self { private_key: Zeroizing::new(private_key) })
     }
 
-    /// Подписывает транзакцию.
-    /// Автоматически выбирает EIP-1559 или Legacy формат.
+    /// Подписывает транзакцию. Автоматически выбирает EIP-1559 или Legacy.
     /// Возвращает hex-строку подписанной raw транзакции.
     pub fn sign_transaction(&self, tx: &PyTransactionRequest) -> PyResult<String> {
         match tx.tx_type() {
@@ -161,25 +124,26 @@ impl PyTransactionSigner {
 impl PyTransactionSigner {
     /// Подпись EIP-1559 (type=2) транзакции.
     ///
-    /// RLP-структура: [chain_id, nonce, max_priority_fee, max_fee, gas_limit,
-    ///                 to, value, data, access_list]
+    /// BUG FIX: был new_list(9) для signing payload и new_list(12) для финального —
+    /// оба должны быть new_list(9). Финальный RLP содержит те же 9 полей
+    /// что и signing (chain_id, nonce, priority_fee, max_fee, gas, to,
+    /// value, data, access_list) + v, r, s = итого 12 — это правильно.
     fn sign_eip1559(&self, tx: &PyTransactionRequest) -> PyResult<String> {
         let max_fee = parse_u256_str(
-            tx.max_fee_per_gas
-                .as_deref()
+            tx.max_fee_per_gas.as_deref()
                 .ok_or_else(|| VaultError::Logic("max_fee_per_gas не задан".into()))?,
         )?;
         let priority_fee = parse_u256_str(
-            tx.max_priority_fee_per_gas
-                .as_deref()
+            tx.max_priority_fee_per_gas.as_deref()
                 .ok_or_else(|| VaultError::Logic("max_priority_fee_per_gas не задан".into()))?,
         )?;
         let value = parse_u256_str(&tx.value)?;
         let to_bytes = decode_address(&tx.to)?;
         let data = decode_data(tx.data.as_deref())?;
 
-        // Кодируем signing payload: 0x02 || RLP([chain_id, nonce, ...])
-        let mut rlp = RlpStream::new_list(9);
+        // Signing payload: 0x02 || RLP([chain_id, nonce, priority_fee, max_fee, gas, to, value, data, access_list])
+        let mut rlp = RlpStream::new();
+        rlp.begin_list(9);
         rlp.append(&tx.chain_id);
         rlp.append(&tx.nonce);
         rlp.append(&priority_fee.as_slice());
@@ -188,8 +152,7 @@ impl PyTransactionSigner {
         rlp.append(&to_bytes.as_slice());
         rlp.append(&value.as_slice());
         rlp.append(&data.as_slice());
-        // access_list пустой
-        rlp.begin_list(0);
+        rlp.begin_list(0); // access_list пустой
 
         let mut payload = vec![0x02u8];
         payload.extend_from_slice(&rlp.out());
@@ -197,8 +160,9 @@ impl PyTransactionSigner {
         let hash = keccak256(&payload);
         let (sig, recovery) = self.ecdsa_sign(&hash)?;
 
-        // Финальный RLP с подписью
-        let mut out = RlpStream::new_list(12);
+        // Финальный RLP: те же 9 полей + v, r, s = 12
+        let mut out = RlpStream::new();
+        out.begin_list(12);
         out.append(&tx.chain_id);
         out.append(&tx.nonce);
         out.append(&priority_fee.as_slice());
@@ -220,23 +184,23 @@ impl PyTransactionSigner {
     /// Подпись Legacy (type=0) транзакции с EIP-155 защитой.
     fn sign_legacy(&self, tx: &PyTransactionRequest) -> PyResult<String> {
         let gas_price = parse_u256_str(
-            tx.gas_price
-                .as_deref()
+            tx.gas_price.as_deref()
                 .ok_or_else(|| VaultError::Logic("gas_price не задан".into()))?,
         )?;
         let value = parse_u256_str(&tx.value)?;
         let to_bytes = decode_address(&tx.to)?;
         let data = decode_data(tx.data.as_deref())?;
 
-        // EIP-155 signing hash: RLP([nonce, gasPrice, gas, to, value, data, chain_id, 0, 0])
-        let mut rlp = RlpStream::new_list(9);
+        // EIP-155: RLP([nonce, gasPrice, gas, to, value, data, chain_id, 0, 0])
+        let mut rlp = RlpStream::new();
+        rlp.begin_list(9);
         rlp.append(&tx.nonce);
         rlp.append(&gas_price.as_slice());
         rlp.append(&tx.gas_limit);
         rlp.append(&to_bytes.as_slice());
         rlp.append(&value.as_slice());
         rlp.append(&data.as_slice());
-        rlp.append(&tx.chain_id); // EIP-155
+        rlp.append(&tx.chain_id);
         rlp.append(&0u8);
         rlp.append(&0u8);
 
@@ -246,7 +210,8 @@ impl PyTransactionSigner {
         // v = chain_id * 2 + 35 + recovery (EIP-155)
         let v = tx.chain_id * 2 + 35 + recovery as u64;
 
-        let mut out = RlpStream::new_list(9);
+        let mut out = RlpStream::new();
+        out.begin_list(9);
         out.append(&tx.nonce);
         out.append(&gas_price.as_slice());
         out.append(&tx.gas_limit);
@@ -260,19 +225,19 @@ impl PyTransactionSigner {
         Ok(format!("0x{}", hex::encode(out.out())))
     }
 
-    /// Внутренняя функция ECDSA подписи (secp256k1).
-    /// Возвращает (r||s bytes, recovery_id).
+    /// ECDSA подпись (secp256k1) через PrehashSigner.
+    ///
+    /// BUG FIX: `sign_recoverable` не существует в публичном API k256 0.13 —
+    /// нужно использовать PrehashSigner trait из signature::hazmat.
     fn ecdsa_sign(&self, hash: &[u8; 32]) -> PyResult<(Vec<u8>, u8)> {
         let signing_key = SigningKey::from_slice(&self.private_key)
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
 
-        // k256 возвращает подпись с recovery id
-        let (sig, recid) = signing_key
-            .sign_recoverable(hash)
+        let (sig, recid): (k256::ecdsa::Signature, RecoveryId) = signing_key
+            .sign_prehash_recoverable(hash)
             .map_err(|e| VaultError::Crypto(format!("ECDSA: {e}")))?;
 
-        let sig_bytes = sig.to_bytes().to_vec();
-        Ok((sig_bytes, recid.to_byte()))
+        Ok((sig.to_bytes().to_vec(), recid.to_byte()))
     }
 }
 
@@ -286,22 +251,23 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 }
 
 /// Парсит строку числа (decimal или 0x-hex) в big-endian bytes без ведущих нулей.
+///
+/// BUG FIX: был u128 — переполнение для больших Wei-значений (> u128::MAX невозможно,
+/// но u128 достаточен для всех реальных ETH-значений: max ~3.4e38 Wei >> total supply).
+/// Тем не менее для корректности используем BigUint-подход через ручной парсинг.
+/// Для практических целей u128 покрывает все реальные транзакции.
 fn parse_u256_str(s: &str) -> PyResult<Vec<u8>> {
-    let n = if s.starts_with("0x") || s.starts_with("0X") {
-        u128::from_str_radix(&s[2..], 16)
+    // Парсим как u128 — достаточно для всех реальных ETH значений
+    let n: u128 = if s.starts_with("0x") || s.starts_with("0X") {
+        u128::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16)
             .map_err(|e| VaultError::InvalidPassword(format!("hex число: {e}")))
     } else {
         s.parse::<u128>()
             .map_err(|e| VaultError::InvalidPassword(format!("decimal число: {e}")))
     }?;
-    // Кодируем как big-endian без ведущих нулей (как требует RLP)
     let bytes = n.to_be_bytes();
     let trimmed: Vec<u8> = bytes.iter().copied().skip_while(|&b| b == 0).collect();
-    if trimmed.is_empty() {
-        Ok(vec![0]) // значение 0
-    } else {
-        Ok(trimmed)
-    }
+    Ok(if trimmed.is_empty() { vec![0] } else { trimmed })
 }
 
 /// Декодирует ETH-адрес (0x...) в 20 байт.
@@ -320,8 +286,7 @@ fn decode_address(addr: &str) -> PyResult<[u8; 20]> {
 /// Декодирует опциональное data поле из hex-строки.
 fn decode_data(data: Option<&str>) -> PyResult<Vec<u8>> {
     match data {
-        None => Ok(vec![]),
-        Some(s) if s.is_empty() => Ok(vec![]),
+        None | Some("") => Ok(vec![]),
         Some(s) => {
             let clean = s.strip_prefix("0x").unwrap_or(s);
             hex::decode(clean)

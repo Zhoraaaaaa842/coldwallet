@@ -3,48 +3,50 @@ name = "coldvault_core"
 version = "0.1.0"
 edition = "2021"
 
-# maturin собирает этот крейт как Python-расширение (.pyd / .so)
 [lib]
 name = "coldvault_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-# --- PyO3: Python-биндинги ---
+# PyO3 биндинги
 pyo3 = { version = "0.21", features = ["extension-module"] }
 
-# --- BIP-39: генерация мнемоник ---
+# BIP-39 мнемоника
 tiny-bip39 = "1"
 
-# --- HD-деривация m/44'/60'/0'/0/0 ---
+# HD деривация m/44'/60'/0'/0/0
 coins-bip32 = "0.9"
 
-# --- Ethereum: адреса, ECDSA secp256k1 ---
-k256 = { version = "0.13", features = ["ecdsa"] }
-ethabi = "18"
+# Ethereum: адреса, ECDSA secp256k1
+# BUG FIX: добавлены features "ecdsa" + "arithmetic" нужные для
+# sign_prehash_recoverable и RecoveryId
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+
+# keccak256 для адресов и хешей транзакций
 tiny-keccak = { version = "2", features = ["keccak"] }
 
-# --- AES-256-GCM шифрование ---
+# AES-256-GCM шифрование vault
 aes-gcm = "0.10"
 
-# --- PBKDF2-SHA256 ---
+# PBKDF2-SHA256
 pbkdf2 = { version = "0.12", features = ["simple"] }
 hmac = "0.12"
 sha2 = "0.10"
 
-# --- Безопасное затирание памяти ---
+# Безопасное затирание памяти
 zeroize = { version = "1", features = ["derive", "zeroize_derive"] }
 
-# --- Случайные числа ---
+# Случайные числа
 rand = "0.8"
 
-# --- RLP-кодирование для транзакций ---
+# RLP-кодирование для транзакций
 rlp = "0.5"
 
-# --- JSON для vault-файлов ---
+# JSON для vault-файлов
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# --- Hex-кодирование ---
+# Hex-кодирование
 hex = "0.4"
 
 [dev-dependencies]
@@ -54,4 +56,4 @@ tempfile = "3"
 opt-level = 3
 lto = true
 strip = true
-panic = "abort"   # уменьшает бинарь и убирает unwinding
+panic = "abort"
