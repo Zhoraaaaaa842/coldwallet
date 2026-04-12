@@ -5,7 +5,9 @@ ColdVault ETH — Модуль работы с сетью Ethereum.
 """
 
 import json
-from typing import Optional, Dict, Any
+import urllib.request
+import urllib.parse
+from typing import Optional, Dict, Any, List
 from decimal import Decimal
 
 from web3 import Web3
@@ -30,6 +32,12 @@ RPC_ENDPOINTS = {
 CHAIN_IDS = {
     "mainnet": 1,
     "sepolia": 11155111,
+}
+
+# Etherscan-совместимые API для истории транзакций (без ключа, лимит 5 req/s)
+ETHERSCAN_API = {
+    "mainnet": "https://api.etherscan.io/api",
+    "sepolia": "https://api-sepolia.etherscan.io/api",
 }
 
 
@@ -175,9 +183,9 @@ class EthNetwork:
             receipt = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
             return {
                 "tx_hash": tx_hash_hex,
-                "status": receipt.get("status"),   # 1 = успех, 0 = revert
-                "block": receipt.get("blockNumber"),
-                "gas_used": receipt.get("gasUsed"),
+                "status": receipt["status"],   # 1 = успех, 0 = revert
+                "block": receipt["blockNumber"],
+                "gas_used": receipt["gasUsed"],
                 "error": None,
             }
         except Exception as e:
@@ -189,6 +197,36 @@ class EthNetwork:
                 "gas_used": None,
                 "error": str(e),
             }
+
+    def get_transaction_history(self, address: str, limit: int = 50) -> List[Dict]:
+        """
+        FIX #4: Реализация получения истории транзакций.
+        Использует Etherscan-совместимый публичный API (без ключа).
+        Возвращает список транзакций в виде dicts.
+        """
+        base_url = ETHERSCAN_API.get(self._network, ETHERSCAN_API["mainnet"])
+        params = urllib.parse.urlencode({
+            "module": "account",
+            "action": "txlist",
+            "address": address,
+            "startblock": 0,
+            "endblock": 99999999,
+            "page": 1,
+            "offset": limit,
+            "sort": "desc",
+            "apikey": "YourApiKeyToken",  # без ключа работает с лимитом
+        })
+        url = f"{base_url}?{params}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ZhoraWallet/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            if data.get("status") == "1":
+                return data.get("result", [])
+            # status "0" может означать "нет транзакций" — не ошибка
+            return []
+        except Exception:
+            return []
 
     def get_transaction_receipt(self, tx_hash: str) -> Optional[Dict]:
         """Получает receipt транзакции (или None если pending)."""
@@ -218,12 +256,18 @@ class EthNetwork:
         return self._w3.eth.estimate_gas(tx)
 
     @staticmethod
+    def is_valid_address(address: str) -> bool:
+        """FIX #8: Проверка валидности Ethereum-адреса через web3."""
+        return Web3.is_address(address)
+
+    @staticmethod
     def wei_to_eth(wei: int) -> str:
         eth = Decimal(str(wei)) / Decimal("1000000000000000000")
         return f"{eth:.18f}".rstrip('0').rstrip('.')
 
     @staticmethod
     def eth_to_wei(eth: float) -> int:
+        """FIX #7: Используем Decimal для точного перевода ETH → Wei."""
         return int(Decimal(str(eth)) * Decimal("1000000000000000000"))
 
     @staticmethod
