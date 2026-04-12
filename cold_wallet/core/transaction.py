@@ -31,7 +31,9 @@ class TransactionRequest:
 
     def validate(self) -> None:
         """Валидация параметров транзакции."""
-        if not self.to or len(self.to) != 42 or not self.to.startswith("0x"):
+        # FIX #1: Использовать Web3.is_address вместо простой проверки len/startswith
+        # Это корректно обрабатывает checksum-адреса и все edge-cases
+        if not self.to or not Web3.is_address(self.to):
             raise ValueError(f"Невалидный адрес получателя: {self.to}")
 
         if self.value_wei < 0:
@@ -59,6 +61,12 @@ class TransactionRequest:
         if has_eip1559 and has_legacy:
             raise ValueError(
                 "Нельзя использовать одновременно EIP-1559 и Legacy параметры газа"
+            )
+
+        # FIX #2: Проверка что max_priority_fee не превышает max_fee (EIP-1559)
+        if has_eip1559 and self.max_priority_fee_per_gas > self.max_fee_per_gas:
+            raise ValueError(
+                "max_priority_fee_per_gas не может превышать max_fee_per_gas"
             )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -103,7 +111,8 @@ class TransactionSigner:
         """
         tx_dict = tx_request.to_dict()
         signed = Account.sign_transaction(tx_dict, private_key)
-        return signed.raw_transaction.hex()
+        # FIX #3: добавляем префикс '0x' для совместимости с broadcast_transaction
+        return "0x" + signed.raw_transaction.hex()
 
     @staticmethod
     def sign_message(private_key: bytes, message: str) -> Dict[str, str]:
@@ -177,7 +186,9 @@ class TransactionSigner:
             req.max_fee_per_gas = int(tx["max_fee_per_gas"])
             req.max_priority_fee_per_gas = int(tx["max_priority_fee_per_gas"])
         else:
-            req.gas_price = int(tx.get("gas_price", 0))
+            # FIX #4: gas_price=0 это валидное значение (не fallback), не подменять
+            gas_price_str = tx.get("gas_price")
+            req.gas_price = int(gas_price_str) if gas_price_str is not None else None
 
         if "data" in tx:
             req.data = tx["data"]

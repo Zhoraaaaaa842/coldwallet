@@ -119,6 +119,10 @@ class KeyManager:
         if self._private_key is None:
             raise RuntimeError("Ключ не загружен. Сначала сгенерируйте или импортируйте кошелёк.")
 
+        # FIX #5: пароль не должен быть пустым
+        if not password:
+            raise ValueError("Пароль не может быть пустым")
+
         salt = secrets.token_bytes(SALT_SIZE)
         nonce = secrets.token_bytes(NONCE_SIZE)
         enc_key = self._derive_encryption_key(password, salt)

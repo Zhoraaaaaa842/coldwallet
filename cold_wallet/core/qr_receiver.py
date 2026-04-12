@@ -71,7 +71,9 @@ def generate_receive_qr(
     qr.add_data(uri)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    img = img.resize((size, size), PILImage.NEAREST)
+    # FIX #6: PIL.Image.NEAREST устарел в новых версиях Pillow — используем PILImage.Resampling.NEAREST
+    resample = getattr(PILImage, "Resampling", PILImage).NEAREST
+    img = img.resize((size, size), resample)
     return img
 
 

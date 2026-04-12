@@ -210,10 +210,15 @@ class USBManager:
         return [f.name for f in d.glob("*.json")] if d.exists() else []
 
     def read_pending_tx(self, filename: str) -> str:
+        # FIX #7: проверяем что vault_path установлен перед чтением
+        if not self._vault_path:
+            raise RuntimeError("USB не инициализирован")
         return (self._vault_path / PENDING_DIR / filename).read_text(encoding="utf-8")
 
     def read_signed_tx(self, filename: str) -> Dict:
-        import json
+        # FIX #7 (cont.): аналогичная проверка + убираем дублирующий import json
+        if not self._vault_path:
+            raise RuntimeError("USB не инициализирован")
         return json.loads((self._vault_path / SIGNED_DIR / filename).read_text(encoding="utf-8"))
 
     def delete_pending_tx(self, filename: str) -> None:
