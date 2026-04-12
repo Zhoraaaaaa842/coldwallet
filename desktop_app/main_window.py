@@ -299,11 +299,11 @@ class ColdVaultMainWindow(QMainWindow):
         self._history_worker = NetworkWorker(self._eth)
         self._price_worker = PriceWorker()
         self._price_worker.price_ready.connect(self._on_price_ready)
-        self._price_worker.error.connect(lambda e: None)  # тихо игнорируем ошибку цены
+        self._price_worker.error.connect(lambda e: None)
 
         self._address: Optional[str] = None
         self._balance_eth = "0"
-        self._eth_price_rub: float = 0.0  # актуальный курс ETH/RUB
+        self._eth_price_rub: float = 0.0
         self._current_nonce = 0
         self._usb_connected = False
         self._usb_display = None
@@ -318,10 +318,9 @@ class ColdVaultMainWindow(QMainWindow):
         self._connect_signals()
 
         QTimer.singleShot(500, self._detect_usb)
-        # Получаем курс сразу при запуске, затем каждые 3 минуты
         QTimer.singleShot(1000, self._fetch_eth_price)
         self._price_timer = QTimer(self)
-        self._price_timer.setInterval(180_000)  # 3 минуты
+        self._price_timer.setInterval(180_000)
         self._price_timer.timeout.connect(self._fetch_eth_price)
         self._price_timer.start()
 
@@ -331,9 +330,7 @@ class ColdVaultMainWindow(QMainWindow):
 
     def _on_price_ready(self, price_rub: float):
         self._eth_price_rub = price_rub
-        # Обновляем отображение баланса с новым курсом
         self._update_balance_display()
-        # Обновляем цену в карточке рынка
         if hasattr(self, "_market_price_label"):
             self._market_price_label.setText(
                 f"{price_rub:,.2f} ₽".replace(",", " ")
@@ -412,7 +409,7 @@ class ColdVaultMainWindow(QMainWindow):
 
         return sidebar
 
-    # ─── Dashboard (редизайн) ─── #
+    # ─── Dashboard ─── #
 
     def _build_dashboard_page(self) -> QWidget:
         wrapper = QWidget()
@@ -425,7 +422,6 @@ class ColdVaultMainWindow(QMainWindow):
         layout.setContentsMargins(36, 28, 36, 28)
         layout.setSpacing(18)
 
-        # ── Заголовок страницы ──
         header = QHBoxLayout()
         title = QLabel("Кошелёк")
         title.setObjectName("titleLabel")
@@ -436,14 +432,12 @@ class ColdVaultMainWindow(QMainWindow):
         header.addWidget(subtitle)
         layout.addLayout(header)
 
-        # ── Карточка баланса (градиент, крупный дизайн) ──
         balance_card = QFrame()
         balance_card.setStyleSheet(CARD_BALANCE_STYLE)
         bc_layout = QVBoxLayout(balance_card)
         bc_layout.setSpacing(4)
         bc_layout.setContentsMargins(28, 24, 28, 24)
 
-        # Строка: иконка ETH + сеть
         top_row = QHBoxLayout()
         eth_icon = QLabel("Ξ Ethereum")
         eth_icon.setStyleSheet(ETH_ICON_STYLE)
@@ -457,7 +451,6 @@ class ColdVaultMainWindow(QMainWindow):
         top_row.addWidget(net_badge)
         bc_layout.addLayout(top_row)
 
-        # Метка «Баланс»
         bal_title = QLabel("Баланс")
         bal_title.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 14px; font-weight: 600;"
@@ -465,7 +458,6 @@ class ColdVaultMainWindow(QMainWindow):
         )
         bc_layout.addWidget(bal_title)
 
-        # ── КРУПНАЯ СУММА В РУБЛЯХ (главный акцент, как на референсе) ──
         self._balance_rub_label = QLabel("— ₽")
         self._balance_rub_label.setStyleSheet(
             f"color: {COLORS['text_primary']}; font-size: 46px; font-weight: 800;"
@@ -473,7 +465,6 @@ class ColdVaultMainWindow(QMainWindow):
         )
         bc_layout.addWidget(self._balance_rub_label)
 
-        # Под ней — сумма в ETH (вторичная, серая, мельче)
         self._balance_label = QLabel("—")
         self._balance_label.setObjectName("balanceLabel")
         self._balance_label.setStyleSheet(
@@ -482,14 +473,12 @@ class ColdVaultMainWindow(QMainWindow):
         )
         bc_layout.addWidget(self._balance_label)
 
-        # Курс ETH/RUB — мелко под балансом
         self._market_price_label = QLabel("Загрузка курса…")
         self._market_price_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 12px; margin-top: 6px;"
         )
         bc_layout.addWidget(self._market_price_label)
 
-        # Адрес (кликабельный)
         self._address_label = QLabel("Подключите USB для начала работы")
         self._address_label.setObjectName("addressLabel")
         self._address_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -503,7 +492,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addWidget(balance_card)
 
-        # ── Панель действий: 4 кнопки ──
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(10)
 
@@ -530,7 +518,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(actions_layout)
 
-        # ── Кнопка Etherscan (полная ширина, синяя) ──
         self._btn_etherscan = QPushButton("⧉  Открыть в обозревателе блокчейна (Etherscan)")
         self._btn_etherscan.setObjectName("etherscanBtn")
         self._btn_etherscan.setMinimumHeight(44)
@@ -556,7 +543,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._btn_etherscan.clicked.connect(self._open_etherscan)
         layout.addWidget(self._btn_etherscan)
 
-        # ── Инфо-карточки (Nonce / Сеть / Gas / USB) ──
         info_grid = QGridLayout()
         info_grid.setSpacing(12)
 
@@ -578,7 +564,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(info_grid)
 
-        # ── Заголовок истории транзакций ──
         tx_header = QHBoxLayout()
         tx_title = QLabel("История транзакций")
         tx_title.setStyleSheet(
@@ -587,7 +572,6 @@ class ColdVaultMainWindow(QMainWindow):
         tx_header.addWidget(tx_title)
         tx_header.addStretch()
 
-        # Кнопка «Обозреватель →» в заголовке
         btn_open_explorer = QPushButton("Обозреватель →")
         btn_open_explorer.setStyleSheet(
             f"color: {COLORS['accent']}; background: transparent; border: none;"
@@ -598,7 +582,6 @@ class ColdVaultMainWindow(QMainWindow):
         tx_header.addWidget(btn_open_explorer)
         layout.addLayout(tx_header)
 
-        # ── Фильтры транзакций ──
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
 
@@ -624,7 +607,6 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(filter_row)
 
-        # ── Контейнер списка транзакций ──
         self._tx_container = QVBoxLayout()
         self._tx_container.setSpacing(8)
 
@@ -644,29 +626,24 @@ class ColdVaultMainWindow(QMainWindow):
         outer_layout.addWidget(scroll)
         return outer
 
-    # ─── Обновление отображения баланса с конвертацией ─── #
+    # ─── Обновление баланса ─── #
 
     def _update_balance_display(self):
-        """Пересчитывает и обновляет оба лейбла баланса (RUB + ETH)."""
-        eth_str = self._balance_eth  # строка, напр. "0.00197903"
+        eth_str = self._balance_eth
         try:
             eth_val = float(eth_str)
         except (ValueError, TypeError):
             eth_val = 0.0
 
-        # ETH-строка
         self._balance_label.setText(f"{eth_val:.8f} ETH")
 
-        # RUB-строка
         if self._eth_price_rub > 0:
             rub_val = eth_val * self._eth_price_rub
-            # Форматируем: "362,19 ₽" — целая часть крупно, дробная мельче
             rub_int = int(rub_val)
             rub_dec = round((rub_val - rub_int) * 100)
-            rub_int_fmt = f"{rub_int:,}".replace(",", " ")  # разряды через пробел
+            rub_int_fmt = f"{rub_int:,}".replace(",", " ")
             self._balance_rub_label.setText(f"{rub_int_fmt},{rub_dec:02d} ₽")
 
-            # Обновляем подпись курса
             price_fmt = f"{self._eth_price_rub:,.0f}".replace(",", " ")
             self._market_price_label.setText(
                 f"Рыночная цена ETH · {price_fmt} ₽"
@@ -708,10 +685,9 @@ class ColdVaultMainWindow(QMainWindow):
             chip.setStyleSheet(chip._active_style if is_active else chip._inactive_style)
         self._render_tx_list(self._all_txs)
 
-    # ─── Рендер списка транзакций ─── #
+    # ─── Рендер транзакций ─── #
 
     def _render_tx_list(self, txs: list):
-        # Чистим старые виджеты
         while self._tx_container.count():
             item = self._tx_container.takeAt(0)
             w = item.widget()
@@ -742,7 +718,6 @@ class ColdVaultMainWindow(QMainWindow):
             self._tx_container.addWidget(lbl)
             return
 
-        # Группировка по дате
         groups = defaultdict(list)
         today_str = datetime.date.today().strftime("%d.%m.%Y")
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d.%m.%Y")
@@ -769,7 +744,6 @@ class ColdVaultMainWindow(QMainWindow):
             )
             self._tx_container.addWidget(sep)
             for tx in group:
-                # Передаём актуальный курс в виджет транзакции
                 item = TxItemWidget(tx, self._address or "", self._eth_price_rub)
                 self._tx_container.addWidget(item)
 
@@ -790,10 +764,7 @@ class ColdVaultMainWindow(QMainWindow):
         else:
             webbrowser.open("https://etherscan.io")
 
-    # ─── Копирование адреса ─── #
-
     def _copy_address(self, event=None):
-        """Копирует адрес кошелька в буфер обмена."""
         if self._address:
             clipboard = QApplication.clipboard()
             clipboard.setText(self._address)
@@ -805,12 +776,9 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.information(self, "Нет адреса", "Кошелёк не разблокирован.")
 
     def _restore_address_label(self):
-        """Восстанавливает текст адреса после копирования."""
         if self._address:
             short = self._address[:10] + "…" + self._address[-8:]
             self._address_label.setText(short)
-
-    # ─── Инфо-карточки ─── #
 
     def _make_info_card(self, title: str, value: str) -> QFrame:
         card = QFrame()
@@ -835,7 +803,7 @@ class ColdVaultMainWindow(QMainWindow):
 
         return card
 
-    # ─── Страница Получить (QR) ─── #
+    # ─── Receive page ─── #
 
     def _build_receive_page(self) -> QWidget:
         page = QWidget()
@@ -1411,18 +1379,12 @@ class ColdVaultMainWindow(QMainWindow):
             btn.setChecked(i == idx)
 
     def _detect_usb(self):
-        """
-        Обнаруживает USB-накопители.
-        detect_usb_drives() возвращает List[Dict[str, str]]:
-            [{"path": "E:\\", "label": "MYUSB", "size": "16.0 GB"}, ...]
-        """
         try:
             drives = USBManager.detect_usb_drives()
             if drives:
                 self._usb_connected = True
-                # Берём первый накопитель — drives[0] это словарь
                 drive_info = drives[0]
-                drive_path = drive_info["path"]   # например "E:\\" или "/media/usb"
+                drive_path = drive_info["path"]
                 drive_label = drive_info.get("label", drive_path)
 
                 self._usb_status.setText(f"● USB: {drive_label}")
@@ -1432,7 +1394,6 @@ class ColdVaultMainWindow(QMainWindow):
                 if self._usb_display:
                     self._usb_display.setText("Подкл.")
 
-                # Передаём строку-путь, а не весь словарь
                 self._load_wallet_from_usb(drive_path)
             else:
                 self._usb_connected = False
@@ -1444,25 +1405,16 @@ class ColdVaultMainWindow(QMainWindow):
             pass
 
     def _load_wallet_from_usb(self, drive_path: str):
-        """
-        Загружает кошелёк с USB.
-        drive_path — строка-путь к корню USB (напр. "E:\\" или "/media/usb").
-        Если wallet.vault найден — запрашивает пароль и вызывает decrypt_and_load().
-        Без правильного пароля кошелёк НЕ открывается.
-        """
         try:
             self._usb.set_usb_path(drive_path)
 
             if not self._usb.is_initialized:
-                # Кошелёк ещё не создан на этой флешке
                 return
 
             wallet_file = str(self._usb.wallet_file)
 
-            # ── Запрос пароля (до 3 попыток) ──
             address = self._unlock_wallet(wallet_file)
             if address is None:
-                # Пользователь отменил или исчерпал попытки
                 return
 
             self._address = address
@@ -1477,10 +1429,6 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка загрузки кошелька", str(e))
 
     def _unlock_wallet(self, wallet_file: str, max_attempts: int = 3) -> Optional[str]:
-        """
-        Показывает диалог ввода пароля и вызывает KeyManager.decrypt_and_load().
-        Возвращает адрес при успехе, None при отмене или исчерпании попыток.
-        """
         for attempt in range(1, max_attempts + 1):
             hint = "" if attempt == 1 else f"  (попытка {attempt} из {max_attempts})"
             password, ok = QInputDialog.getText(
@@ -1491,7 +1439,6 @@ class ColdVaultMainWindow(QMainWindow):
             )
 
             if not ok or not password:
-                # Пользователь нажал «Отмена»
                 QMessageBox.information(
                     self,
                     "Кошелёк заблокирован",
@@ -1563,6 +1510,10 @@ class ColdVaultMainWindow(QMainWindow):
             self._legacy_widget.show()
 
     def _create_unsigned_tx(self):
+        """
+        Создаёт неподписанную транзакцию и сохраняет на USB.
+        Конвертирует ETH→Wei и Gwei→Wei перед передачей в TransactionRequest.
+        """
         if not self._address or not self._usb_connected:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован или USB не подключён.")
             return
@@ -1570,22 +1521,37 @@ class ColdVaultMainWindow(QMainWindow):
         if not to.startswith("0x") or len(to) != 42:
             QMessageBox.warning(self, "Ошибка", "Неверный адрес получателя")
             return
-        amount = self._amount_input.value()
-        if amount <= 0:
+        amount_eth = self._amount_input.value()
+        if amount_eth <= 0:
             QMessageBox.warning(self, "Ошибка", "Укажите сумму > 0")
             return
         try:
             use_eip1559 = self._tx_type_combo.currentIndex() == 0
+
+            # Конвертация ETH → Wei
+            value_wei = int(amount_eth * 10**18)
+
+            # Конвертация Gwei → Wei
+            if use_eip1559:
+                max_fee_per_gas = int(self._max_fee_input.value() * 10**9)
+                max_priority_fee_per_gas = int(self._priority_fee_input.value() * 10**9)
+                gas_price = None
+            else:
+                max_fee_per_gas = None
+                max_priority_fee_per_gas = None
+                gas_price = int(self._gas_price_input.value() * 10**9)
+
             tx_req = TransactionRequest(
                 to=to,
-                value_eth=amount,
+                value_wei=value_wei,
                 nonce=self._current_nonce,
-                gas_limit=int(self._gas_limit_input.value()),
-                max_fee_gwei=self._max_fee_input.value() if use_eip1559 else None,
-                priority_fee_gwei=self._priority_fee_input.value() if use_eip1559 else None,
-                gas_price_gwei=self._gas_price_input.value() if not use_eip1559 else None,
                 chain_id=self._eth.chain_id or 1,
+                gas_limit=int(self._gas_limit_input.value()),
+                max_fee_per_gas=max_fee_per_gas,
+                max_priority_fee_per_gas=max_priority_fee_per_gas,
+                gas_price=gas_price,
             )
+
             tx_json = TransactionSigner.serialize_unsigned_tx(tx_req)
             fname = f"tx_{int(time.time())}.json"
             path = self._usb.save_pending_tx(tx_json, fname)
@@ -1594,8 +1560,12 @@ class ColdVaultMainWindow(QMainWindow):
                 f"Сохранено в pending/:\n{path}\n\n"
                 f"Перейдите на вкладку 'Подписать & Отправить'."
             )
+            self._to_input.clear()
+            self._amount_input.setValue(0)
+
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", str(e))
+            tb = traceback.format_exc()
+            QMessageBox.critical(self, "Ошибка", f"{e}\n\nПодробности:\n{tb}")
 
     def _connect_signals(self):
         self._balance_worker.error.connect(
