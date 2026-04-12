@@ -6,15 +6,9 @@ ZhoraWallet ETH — USB Storage Manager.
 import os
 import json
 import platform
+import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
-
-# Структура папок на USB:
-# /ColdVault/
-# ├── wallet.vault        # Зашифрованный кошелёк
-# ├── config.json         # Конфигурация
-# ├── pending/            # Неподписанные транзакции
-# └── signed/             # Подписанные транзакции
 
 VAULT_DIR   = "ColdVault"
 WALLET_FILE = "wallet.vault"
@@ -49,12 +43,23 @@ class USBManager:
             and (self._vault_path / WALLET_FILE).exists()
         )
 
+    # ------------------------------------------------------------------ #
+    #  FIX #2: Path Traversal защита                                       #
+    # ------------------------------------------------------------------ #
+    def _safe_path(self, base_dir: Path, filename: str) -> Path:
+        """
+        Проверяет что filename не выходит за пределы base_dir.
+        Защита от path traversal атак (../../etc/passwd и т.п.).
+        """
+        resolved = (base_dir / filename).resolve()
+        base_resolved = base_dir.resolve()
+        if not str(resolved).startswith(str(base_resolved) + os.sep) \
+                and resolved != base_resolved:
+            raise ValueError(f"Недопустимый путь к файлу: {filename}")
+        return resolved
+
     @staticmethod
     def detect_usb_drives() -> List[Dict[str, str]]:
-        """
-        Обнаруживает подключённые USB-накопители.
-        Возвращает [{"path": ..., "label": ..., "size": ...}]
-        """
         system = platform.system()
         if system == "Windows":
             return USBManager._detect_windows()
@@ -66,7 +71,6 @@ class USBManager:
 
     @staticmethod
     def _detect_windows() -> List[Dict[str, str]]:
-        """Обнаружение USB на Windows через ctypes."""
         drives = []
         try:
             import ctypes
@@ -76,14 +80,12 @@ class USBManager:
                     letter = chr(65 + letter_idx)
                     drive_path = f"{letter}:\\"
                     drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive_path)
-                    # 2 = DRIVE_REMOVABLE (флешки)
-                    if drive_type == 2:
+                    if drive_type == 2:  # DRIVE_REMOVABLE
                         vol_name = ctypes.create_unicode_buffer(1024)
                         ctypes.windll.kernel32.GetVolumeInformationW(
                             drive_path, vol_name, 1024, None, None, None, None, 0
                         )
                         label = vol_name.value or f"USB ({letter}:)"
-
                         free_bytes  = ctypes.c_ulonglong(0)
                         total_bytes = ctypes.c_ulonglong(0)
                         ctypes.windll.kernel32.GetDiskFreeSpaceExW(
@@ -103,7 +105,6 @@ class USBManager:
 
     @staticmethod
     def _detect_linux() -> List[Dict[str, str]]:
-        """Обнаружение USB на Linux через /proc/mounts."""
         drives = []
         mount_points = ("/media", "/mnt", "/run/media")
         try:
@@ -127,23 +128,56 @@ class USBManager:
 
     @staticmethod
     def _detect_macos() -> List[Dict[str, str]]:
-        """Обнаружение USB на macOS через /Volumes."""
+        """
+        FIX #7: Используем diskutil для фильтрации только физических
+        съёмных носителей. Сетевые диски и Time Machine исключены.
+        """
         drives = []
-        volumes = Path("/Volumes")
-        if volumes.exists():
-            for vol in volumes.iterdir():
-                if vol.is_dir() and vol.name != "Macintosh HD":
-                    try:
-                        stat = os.statvfs(str(vol))
-                        size_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
-                        if size_gb < 256:
-                            drives.append({
-                                "path": str(vol),
-                                "label": vol.name,
-                                "size": f"{size_gb:.1f} GB",
-                            })
-                    except Exception:
-                        pass
+        try:
+            result = subprocess.run(
+                ["diskutil", "list", "-plist", "external"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                raise RuntimeError("diskutil failed")
+
+            import plistlib
+            plist = plistlib.loads(result.stdout.encode())
+            disk_ids = plist.get("AllDisksAndPartitions", [])
+
+            for disk in disk_ids:
+                disk_id = disk.get("DeviceIdentifier", "")
+                # Пропускаем разделы, берём только целые диски
+                if not disk_id or "s" in disk_id.split("disk")[-1]:
+                    continue
+                mount = disk.get("MountPoint", "")
+                if not mount or not os.path.isdir(mount):
+                    continue
+                label = os.path.basename(mount) or disk_id
+                try:
+                    stat = os.statvfs(mount)
+                    size_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
+                    size_str = f"{size_gb:.1f} GB"
+                except Exception:
+                    size_str = "N/A"
+                drives.append({"path": mount, "label": label, "size": size_str})
+        except Exception:
+            # Fallback: старый метод через /Volumes если diskutil недоступен
+            volumes = Path("/Volumes")
+            if volumes.exists():
+                for vol in volumes.iterdir():
+                    if vol.is_dir() and vol.name not in ("Macintosh HD", "Preboot", "Recovery", "VM"):
+                        try:
+                            stat = os.statvfs(str(vol))
+                            size_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
+                            if 0 < size_gb < 256:
+                                drives.append({
+                                    "path": str(vol),
+                                    "label": vol.name,
+                                    "size": f"{size_gb:.1f} GB",
+                                })
+                        except Exception:
+                            pass
         return drives
 
     def set_usb_path(self, path: str) -> None:
@@ -180,7 +214,7 @@ class USBManager:
     def save_pending_tx(self, tx_json: str, filename: str) -> Path:
         if not self._vault_path:
             raise RuntimeError("USB не инициализирован")
-        p = self._vault_path / PENDING_DIR / filename
+        p = self._safe_path(self._vault_path / PENDING_DIR, filename)
         p.write_text(tx_json, encoding="utf-8")
         return p
 
@@ -193,7 +227,7 @@ class USBManager:
             "raw_tx": raw_tx_hex,
             "signed_at": self._get_timestamp(),
         }
-        p = self._vault_path / SIGNED_DIR / filename
+        p = self._safe_path(self._vault_path / SIGNED_DIR, filename)
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return p
 
@@ -210,19 +244,23 @@ class USBManager:
         return [f.name for f in d.glob("*.json")] if d.exists() else []
 
     def read_pending_tx(self, filename: str) -> str:
-        # FIX #7: проверяем что vault_path установлен перед чтением
         if not self._vault_path:
             raise RuntimeError("USB не инициализирован")
-        return (self._vault_path / PENDING_DIR / filename).read_text(encoding="utf-8")
+        # FIX #2: path traversal защита
+        p = self._safe_path(self._vault_path / PENDING_DIR, filename)
+        return p.read_text(encoding="utf-8")
 
     def read_signed_tx(self, filename: str) -> Dict:
-        # FIX #7 (cont.): аналогичная проверка + убираем дублирующий import json
         if not self._vault_path:
             raise RuntimeError("USB не инициализирован")
-        return json.loads((self._vault_path / SIGNED_DIR / filename).read_text(encoding="utf-8"))
+        # FIX #2: path traversal защита
+        p = self._safe_path(self._vault_path / SIGNED_DIR, filename)
+        return json.loads(p.read_text(encoding="utf-8"))
 
     def delete_pending_tx(self, filename: str) -> None:
-        p = self._vault_path / PENDING_DIR / filename
+        if not self._vault_path:
+            raise RuntimeError("USB не инициализирован")
+        p = self._safe_path(self._vault_path / PENDING_DIR, filename)
         if p.exists():
             p.unlink()
 

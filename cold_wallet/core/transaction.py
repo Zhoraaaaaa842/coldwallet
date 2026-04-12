@@ -1,38 +1,32 @@
 """
-ColdVault ETH — Модуль подписи и сериализации транзакций.
+ZhoraWallet ETH — Модуль подписи и сериализации транзакций.
 Поддерживает Legacy и EIP-1559 транзакции.
 Работает ОФЛАЙН — подписывает сырую транзакцию без обращения к сети.
 """
 
 import json
 from typing import Optional, Dict, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 from eth_account import Account
-from eth_account.signers.local import LocalAccount
 from web3 import Web3
 
 
 @dataclass
 class TransactionRequest:
     """Параметры транзакции для подписи."""
-    to: str               # Адрес получателя
-    value_wei: int        # Сумма в Wei
-    nonce: int            # Nonce отправителя
-    chain_id: int = 1     # 1 = Mainnet, 11155111 = Sepolia
+    to: str
+    value_wei: int
+    nonce: int
+    chain_id: int = 1
     gas_limit: int = 21000
-    # EIP-1559
     max_fee_per_gas: Optional[int] = None
     max_priority_fee_per_gas: Optional[int] = None
-    # Legacy
     gas_price: Optional[int] = None
-    # Data (для взаимодействия с контрактами)
     data: Optional[str] = None
 
     def validate(self) -> None:
         """Валидация параметров транзакции."""
-        # FIX #1: Использовать Web3.is_address вместо простой проверки len/startswith
-        # Это корректно обрабатывает checksum-адреса и все edge-cases
         if not self.to or not Web3.is_address(self.to):
             raise ValueError(f"Невалидный адрес получателя: {self.to}")
 
@@ -45,9 +39,8 @@ class TransactionRequest:
         if self.gas_limit < 21000:
             raise ValueError("Gas limit не может быть меньше 21000")
 
-        # Проверка: либо EIP-1559, либо Legacy
         has_eip1559 = (
-            self.max_fee_per_gas is not None 
+            self.max_fee_per_gas is not None
             and self.max_priority_fee_per_gas is not None
         )
         has_legacy = self.gas_price is not None
@@ -63,14 +56,23 @@ class TransactionRequest:
                 "Нельзя использовать одновременно EIP-1559 и Legacy параметры газа"
             )
 
-        # FIX #2: Проверка что max_priority_fee не превышает max_fee (EIP-1559)
         if has_eip1559 and self.max_priority_fee_per_gas > self.max_fee_per_gas:
             raise ValueError(
                 "max_priority_fee_per_gas не может превышать max_fee_per_gas"
             )
 
+        # FIX #4: валидация поля data — должно быть валидным hex
+        if self.data is not None:
+            d = self.data
+            if d.startswith("0x") or d.startswith("0X"):
+                d = d[2:]
+            if d and not all(c in "0123456789abcdefABCDEF" for c in d):
+                raise ValueError(
+                    "Поле data должно быть hex-строкой (0x...). "
+                    "Транзакция с невалидным data отклонена."
+                )
+
     def to_dict(self) -> Dict[str, Any]:
-        """Конвертация в словарь для eth_account."""
         self.validate()
 
         tx: Dict[str, Any] = {
@@ -82,12 +84,10 @@ class TransactionRequest:
         }
 
         if self.max_fee_per_gas is not None:
-            # EIP-1559 (Type 2)
             tx["maxFeePerGas"] = self.max_fee_per_gas
             tx["maxPriorityFeePerGas"] = self.max_priority_fee_per_gas
             tx["type"] = 2
         else:
-            # Legacy
             tx["gasPrice"] = self.gas_price
 
         if self.data:
@@ -104,22 +104,14 @@ class TransactionSigner:
         private_key: bytes,
         tx_request: TransactionRequest
     ) -> str:
-        """
-        Подписывает транзакцию и возвращает raw signed TX (hex).
-        
-        Этот raw TX можно передать онлайн-ПК для broadcast.
-        """
+        """Подписывает транзакцию и возвращает raw signed TX (hex)."""
         tx_dict = tx_request.to_dict()
         signed = Account.sign_transaction(tx_dict, private_key)
-        # FIX #3: добавляем префикс '0x' для совместимости с broadcast_transaction
         return "0x" + signed.raw_transaction.hex()
 
     @staticmethod
     def sign_message(private_key: bytes, message: str) -> Dict[str, str]:
-        """
-        Подписывает произвольное сообщение (EIP-191).
-        Возвращает словарь с компонентами подписи.
-        """
+        """Подписывает произвольное сообщение (EIP-191)."""
         from eth_account.messages import encode_defunct
         msg = encode_defunct(text=message)
         signed = Account.sign_message(msg, private_key)
@@ -133,10 +125,7 @@ class TransactionSigner:
 
     @staticmethod
     def serialize_unsigned_tx(tx_request: TransactionRequest) -> str:
-        """
-        Сериализует неподписанную транзакцию в JSON.
-        Используется для передачи между онлайн-ПК и USB-кошельком.
-        """
+        """Сериализует неподписанную транзакцию в JSON для USB-передачи."""
         tx_request.validate()
         data = {
             "type": "unsigned_transaction",
@@ -152,9 +141,7 @@ class TransactionSigner:
 
         if tx_request.max_fee_per_gas is not None:
             data["tx"]["max_fee_per_gas"] = str(tx_request.max_fee_per_gas)
-            data["tx"]["max_priority_fee_per_gas"] = str(
-                tx_request.max_priority_fee_per_gas
-            )
+            data["tx"]["max_priority_fee_per_gas"] = str(tx_request.max_priority_fee_per_gas)
             data["tx"]["tx_type"] = "eip1559"
         else:
             data["tx"]["gas_price"] = str(tx_request.gas_price)
@@ -186,7 +173,6 @@ class TransactionSigner:
             req.max_fee_per_gas = int(tx["max_fee_per_gas"])
             req.max_priority_fee_per_gas = int(tx["max_priority_fee_per_gas"])
         else:
-            # FIX #4: gas_price=0 это валидное значение (не fallback), не подменять
             gas_price_str = tx.get("gas_price")
             req.gas_price = int(gas_price_str) if gas_price_str is not None else None
 
