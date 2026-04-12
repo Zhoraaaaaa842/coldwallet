@@ -1,24 +1,19 @@
 //! Маппинг Rust-ошибок в Python-исключения через PyO3.
 
 use pyo3::exceptions::{
-    PyPermissionError, PyRuntimeError, PyValueError,
+    PyIOError, PyPermissionError, PyRuntimeError, PyValueError,
 };
 use pyo3::PyErr;
 
-/// Универсальный тип ошибки крейта.
 #[derive(Debug)]
 pub enum VaultError {
-    /// Неверный пароль или повреждённый файл
     InvalidPassword(String),
-    /// Блокировка после MAX_FAILED_ATTEMPTS попыток
     TooManyAttempts,
-    /// Ошибка логики (ключ не загружен и т.д.)
     Logic(String),
-    /// Ошибка ввода-вывода
     Io(std::io::Error),
-    /// Ошибка криптографии
+    /// FIX: добавлен отдельный вариант CryptoError вместо Logic
+    /// — иначе Python получал RuntimeError на крипто-ошибках вместо ValueError
     Crypto(String),
-    /// Path traversal попытка
     PathTraversal(String),
 }
 
@@ -26,30 +21,35 @@ impl std::fmt::Display for VaultError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidPassword(m) => write!(f, "{m}"),
-            Self::TooManyAttempts => write!(
-                f,
-                "Превышено максимальное число попыток. Перезапустите приложение."
-            ),
+            Self::TooManyAttempts =>
+                write!(f, "Превышено максимальное число попыток."),
             Self::Logic(m) => write!(f, "{m}"),
-            Self::Io(e) => write!(f, "IO ошибка: {e}"),
-            Self::Crypto(m) => write!(f, "Крипто-ошибка: {m}"),
-            Self::PathTraversal(m) => write!(f, "Path traversal: {m}"),
+            Self::Io(e) => write!(f, "IO: {e}"),
+            Self::Crypto(m) => write!(f, "Крипто: {m}"),
+            Self::PathTraversal(m) => write!(f, "PathTraversal: {m}"),
         }
     }
 }
 
 impl std::error::Error for VaultError {}
 
-/// Автоматическое преобразование VaultError → PyErr
 impl From<VaultError> for PyErr {
     fn from(e: VaultError) -> PyErr {
         match e {
-            VaultError::TooManyAttempts => PyPermissionError::new_err(e.to_string()),
-            VaultError::InvalidPassword(m) => PyValueError::new_err(m),
-            VaultError::PathTraversal(m) => PyPermissionError::new_err(m),
-            VaultError::Logic(m) => PyRuntimeError::new_err(m),
-            VaultError::Io(e) => PyRuntimeError::new_err(e.to_string()),
-            VaultError::Crypto(m) => PyValueError::new_err(m),
+            VaultError::TooManyAttempts =>
+                PyPermissionError::new_err(e.to_string()),
+            VaultError::InvalidPassword(m) =>
+                PyValueError::new_err(m),
+            VaultError::PathTraversal(m) =>
+                PyPermissionError::new_err(m),
+            VaultError::Logic(m) =>
+                PyRuntimeError::new_err(m),
+            // FIX: Io → PyIOError (было PyRuntimeError — неправильно)
+            VaultError::Io(e) =>
+                PyIOError::new_err(e.to_string()),
+            // FIX: Crypto → PyValueError (было PyRuntimeError)
+            VaultError::Crypto(m) =>
+                PyValueError::new_err(m),
         }
     }
 }

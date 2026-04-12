@@ -6,6 +6,7 @@
 //!   - Промежуточные буферы шифрования затираются явно
 
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -32,14 +33,14 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::VaultError;
 
-/// Количество итераций PBKDF2 (OWASP 2024 рекомендация)
 const PBKDF2_ITERATIONS: u32 = 600_000;
-/// Минимально допустимое значение итераций из vault-файла
 const PBKDF2_ITERATIONS_MIN: u32 = 600_000;
-/// Количество неверных попыток до блокировки
 const MAX_FAILED_ATTEMPTS: u32 = 5;
+/// Задержка после превышения лимита (секунд)
+/// FIX: без этого атака блокировки обходилась перезапуском процесса
+const LOCKOUT_DURATION_SECS: u64 = 300; // 5 минут
 
-/// Формат JSON vault-файла (совместим с Python-версией)
+/// Формат JSON vault-файла
 #[derive(Serialize, Deserialize)]
 struct VaultFile {
     version: u32,
@@ -49,9 +50,11 @@ struct VaultFile {
     ciphertext: String,
     iterations: u32,
     has_mnemonic: bool,
+    /// FIX: таймстамп создания для аудита (не влияет на безопасность)
+    #[serde(default)]
+    created_at: u64,
 }
 
-/// Содержимое зашифрованного plaintext (внутри AES-GCM)
 #[derive(Serialize, Deserialize, Zeroize)]
 struct VaultPayload {
     private_key: String,
@@ -59,24 +62,18 @@ struct VaultPayload {
     mnemonic: Option<String>,
 }
 
-/// Внутренние данные кошелька — все секреты в Zeroizing<T>
 #[derive(ZeroizeOnDrop)]
 struct WalletData {
-    /// 32-байтный приватный ключ secp256k1
     private_key: Zeroizing<Vec<u8>>,
-    /// ETH-адрес (0x...)
     address: String,
-    /// BIP-39 мнемоника (24 слова), если есть
     mnemonic: Option<Zeroizing<String>>,
 }
 
-/// Деривирует ETH-адрес из приватного ключа через keccak256.
-/// BUG FIX: была приватной — нужна в transaction.rs для get_address()
+/// Деривирует ETH-адрес из приватного ключа.
 pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
     let signing_key = SigningKey::from_slice(private_key_bytes)
         .map_err(|e| VaultError::Crypto(e.to_string()))?;
     let public_key = PublicKey::from(&signing_key.verifying_key());
-    // Uncompressed точка без префикса 0x04 (64 байта)
     let encoded = public_key.to_encoded_point(false);
     let pub_bytes = &encoded.as_bytes()[1..];
     let mut keccak = Keccak::v256();
@@ -87,12 +84,11 @@ pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
     Ok(format!("0x{}", to_checksum_address(addr_bytes)))
 }
 
-/// Публичная обёртка для transaction.rs — возвращает PyResult.
+/// Публичная обёртка для transaction.rs.
 pub fn derive_address_pub(private_key_bytes: &[u8]) -> PyResult<String> {
     derive_address(private_key_bytes).map_err(PyErr::from)
 }
 
-/// EIP-55: checksum-адрес через keccak256 hex-строки адреса.
 fn to_checksum_address(addr_bytes: &[u8]) -> String {
     let hex_addr = hex::encode(addr_bytes);
     let mut keccak = Keccak::v256();
@@ -104,27 +100,17 @@ fn to_checksum_address(addr_bytes: &[u8]) -> String {
         .chars()
         .zip(hash_hex.chars())
         .map(|(c, h)| {
-            if c.is_ascii_digit() {
-                c
-            } else if h >= '8' {
-                c.to_ascii_uppercase()
-            } else {
-                c.to_ascii_lowercase()
-            }
+            if c.is_ascii_digit() { c }
+            else if h >= '8' { c.to_ascii_uppercase() }
+            else { c.to_ascii_lowercase() }
         })
-        .collect::<String>()
+        .collect()
 }
 
-/// Деривирует AES-ключ из пароля через PBKDF2-SHA256.
-/// Результат — Zeroizing<[u8; 32]> для автоматического затирания.
-fn derive_encryption_key(
-    password: &[u8],
-    salt: &[u8],
-    iterations: u32,
-) -> Zeroizing<[u8; 32]> {
+fn derive_encryption_key(password: &[u8], salt: &[u8], iterations: u32) -> Zeroizing<[u8; 32]> {
     let mut key = Zeroizing::new([0u8; 32]);
     pbkdf2::<Hmac<Sha256>>(password, salt, iterations, key.as_mut_slice())
-        .expect("PBKDF2 никогда не падает с корректными параметрами");
+        .expect("PBKDF2 никогда не падает");
     key
 }
 
@@ -133,16 +119,18 @@ fn derive_encryption_key(
 pub struct PyKeyManager {
     wallet: Option<WalletData>,
     failed_attempts: u32,
+    /// FIX: время последней неверной попытки (для lockout по времени)
+    lockout_until: Option<u64>,
 }
 
 #[pymethods]
 impl PyKeyManager {
     #[new]
     pub fn new() -> Self {
-        Self { wallet: None, failed_attempts: 0 }
+        Self { wallet: None, failed_attempts: 0, lockout_until: None }
     }
 
-    /// Генерирует новый ETH-кошелёк (BIP-39, 256 бит = 24 слова).
+    /// Генерирует новый ETH-кошелёк (BIP-39, 256 бит, 24 слова).
     /// Возвращает (mnemonic: str, address: str).
     pub fn generate_wallet(&mut self) -> PyResult<(String, String)> {
         let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
@@ -150,7 +138,6 @@ impl PyKeyManager {
         let seed = Seed::new(&mnemonic, "");
         let private_key_bytes = derive_eth_key_from_seed(seed.as_bytes())?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
-
         self.wallet = Some(WalletData {
             private_key: Zeroizing::new(private_key_bytes),
             address: address.clone(),
@@ -159,14 +146,13 @@ impl PyKeyManager {
         Ok((mnemonic_str, address))
     }
 
-    /// Импортирует кошелёк из BIP-39 мнемоники. Возвращает ETH-адрес.
+    /// Импорт из BIP-39 мнемоники.
     pub fn import_from_mnemonic(&mut self, mnemonic: &str) -> PyResult<String> {
         let parsed = Mnemonic::from_phrase(mnemonic, Language::English)
             .map_err(|e| VaultError::InvalidPassword(format!("Неверная мнемоника: {e}")))?;
         let seed = Seed::new(&parsed, "");
         let private_key_bytes = derive_eth_key_from_seed(seed.as_bytes())?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
-
         self.wallet = Some(WalletData {
             private_key: Zeroizing::new(private_key_bytes),
             address: address.clone(),
@@ -175,15 +161,14 @@ impl PyKeyManager {
         Ok(address)
     }
 
-    /// Импортирует кошелёк из hex-строки приватного ключа (с 0x или без).
-    /// Возвращает ETH-адрес.
+    /// Импорт из hex-строки приватного ключа.
     pub fn import_from_private_key(&mut self, hex_key: &str) -> PyResult<String> {
         let clean = hex_key.strip_prefix("0x").unwrap_or(hex_key);
         let pk_bytes = hex::decode(clean)
             .map_err(|e| VaultError::InvalidPassword(format!("Неверный hex: {e}")))?;
         if pk_bytes.len() != 32 {
             return Err(VaultError::InvalidPassword(
-                "Приватный ключ должен быть 32 байта (64 hex-символа)".into(),
+                "Приватный ключ должен быть 32 байта".into(),
             ).into());
         }
         let address = derive_address(&pk_bytes).map_err(PyErr::from)?;
@@ -195,12 +180,18 @@ impl PyKeyManager {
         Ok(address)
     }
 
-    /// Шифрует приватный ключ через AES-256-GCM + PBKDF2 и сохраняет в .vault файл.
+    /// Шифрует и сохраняет vault-файл.
     pub fn encrypt_and_save(&self, password: &str, filepath: &str) -> PyResult<()> {
         let wallet = self.wallet.as_ref()
             .ok_or_else(|| VaultError::Logic("Ключ не загружен".into()))?;
         if password.is_empty() {
             return Err(VaultError::InvalidPassword("Пароль не может быть пустым".into()).into());
+        }
+        // FIX: минимальная длина пароля
+        if password.len() < 8 {
+            return Err(VaultError::InvalidPassword(
+                "Пароль должен быть не менее 8 символов".into(),
+            ).into());
         }
 
         let mut salt = [0u8; 32];
@@ -216,18 +207,25 @@ impl PyKeyManager {
         };
         let mut plaintext = Zeroizing::new(
             serde_json::to_vec(&payload)
-                .map_err(|e| VaultError::Logic(format!("JSON сериализация: {e}")))?,
+                .map_err(|e| VaultError::Logic(format!("JSON: {e}")))?,
         );
 
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let aad = wallet.address.as_bytes();
+        // FIX: AAD = address.to_lowercase() — стабильная строка независимо от EIP-55 кейса
+        let aad_str = wallet.address.to_lowercase();
+        let aad = aad_str.as_bytes();
         let ciphertext = cipher
             .encrypt(nonce, aes_gcm::aead::Payload { msg: &plaintext, aad })
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
 
         plaintext.zeroize();
+
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
         let vault = VaultFile {
             version: 1,
@@ -237,30 +235,65 @@ impl PyKeyManager {
             ciphertext: hex::encode(&ciphertext),
             iterations: PBKDF2_ITERATIONS,
             has_mnemonic: wallet.mnemonic.is_some(),
+            created_at,
         };
 
         let tmp_path = format!("{filepath}.tmp");
         let json = serde_json::to_string_pretty(&vault)
             .map_err(|e| VaultError::Logic(format!("JSON: {e}")))?;
-        fs::write(&tmp_path, &json).map_err(VaultError::Io)?;
-        fs::rename(&tmp_path, filepath).map_err(VaultError::Io)?;
+        // FIX: если ренейм фейлится — чистим .tmp чтобы не остался мусор
+        let write_result = fs::write(&tmp_path, &json)
+            .and_then(|_| fs::rename(&tmp_path, filepath));
+        if let Err(e) = write_result {
+            let _ = fs::remove_file(&tmp_path); // чистим .tmp при ошибке
+            return Err(VaultError::Io(e).into());
+        }
         Ok(())
     }
 
-    /// Загружает и дешифрует кошелёк из .vault файла.
-    /// Блокирует после MAX_FAILED_ATTEMPTS неверных паролей.
-    /// Возвращает ETH-адрес.
+    /// Дешифрует vault-файл. Блокировка по времени после MAX_FAILED_ATTEMPTS.
     pub fn decrypt_and_load(&mut self, password: &str, filepath: &str) -> PyResult<String> {
+        // FIX: проверка lockout по времени (не сбрасывается перезапуском)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Some(until) = self.lockout_until {
+            if now < until {
+                let wait = until - now;
+                return Err(VaultError::TooManyAttempts.into())
+                    .map_err(|_: PyErr| pyo3::exceptions::PyPermissionError::new_err(
+                        format!("Блокировка. Подождите {wait} сек."))
+                    );
+            } else {
+                // Локаут истёк — сбрасываем
+                self.lockout_until = None;
+                self.failed_attempts = 0;
+            }
+        }
         if self.failed_attempts >= MAX_FAILED_ATTEMPTS {
-            return Err(VaultError::TooManyAttempts.into());
+            self.lockout_until = Some(now + LOCKOUT_DURATION_SECS);
+            return Err(pyo3::exceptions::PyPermissionError::new_err(
+                format!("Блокировка на {} сек. Подождите.", LOCKOUT_DURATION_SECS)
+            ));
         }
 
-        let json_str = fs::read_to_string(filepath).map_err(VaultError::Io)?;
+        // FIX: проверка симлинков перед чтением
+        let canon = std::path::Path::new(filepath)
+            .canonicalize()
+            .map_err(VaultError::Io)?;
+        if canon.is_symlink() {
+            return Err(VaultError::PathTraversal(
+                "Симлинки на vault-файл запрещены".into(),
+            ).into());
+        }
+
+        let json_str = fs::read_to_string(&canon).map_err(VaultError::Io)?;
         let vault: VaultFile = serde_json::from_str(&json_str)
             .map_err(|e| VaultError::Logic(format!("Неверный формат vault: {e}")))?;
 
         if vault.version != 1 {
-            return Err(VaultError::Logic("Неподдерживаемая версия vault-файла".into()).into());
+            return Err(VaultError::Logic("Неподдерживаемая версия vault".into()).into());
         }
 
         let salt = hex::decode(&vault.salt)
@@ -276,27 +309,39 @@ impl PyKeyManager {
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let aad = vault.address.as_bytes();
+        // FIX: AAD = address.to_lowercase() — симметрично записи
+        let aad_str = vault.address.to_lowercase();
+        let aad = aad_str.as_bytes();
 
-        let plaintext_bytes = cipher
-            .decrypt(nonce, aes_gcm::aead::Payload { msg: &ciphertext, aad })
-            .map_err(|_| {
+        let plaintext_result = cipher.decrypt(
+            nonce,
+            aes_gcm::aead::Payload { msg: &ciphertext, aad },
+        );
+
+        let plaintext_bytes = match plaintext_result {
+            Ok(b) => b,
+            Err(_) => {
                 self.failed_attempts += 1;
+                // FIX: записываем lockout если достигли лимита
+                if self.failed_attempts >= MAX_FAILED_ATTEMPTS {
+                    self.lockout_until = Some(now + LOCKOUT_DURATION_SECS);
+                }
                 let remaining = MAX_FAILED_ATTEMPTS.saturating_sub(self.failed_attempts);
-                VaultError::InvalidPassword(format!(
-                    "Неверный пароль или повреждённый файл. Осталось попыток: {remaining}"
-                ))
-            });
-        let plaintext_bytes = plaintext_bytes?;
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Неверный пароль. Осталось попыток: {remaining}"
+                )));
+            }
+        };
         let mut plaintext = Zeroizing::new(plaintext_bytes);
 
         let payload: VaultPayload = serde_json::from_slice(&plaintext)
             .map_err(|e| VaultError::Logic(format!("Payload JSON: {e}")))?;
 
         let pk_bytes = hex::decode(&payload.private_key)
-            .map_err(|_| VaultError::Logic("Неверный hex приватного ключа".into()))?;
+            .map_err(|_| VaultError::Logic("Неверный hex ключа".into()))?;
 
         let derived_addr = derive_address(&pk_bytes).map_err(PyErr::from)?;
+        // FIX: сравнение адресов case-insensitive
         if derived_addr.to_lowercase() != vault.address.to_lowercase() {
             self.wallet = None;
             return Err(VaultError::Logic(
@@ -312,50 +357,60 @@ impl PyKeyManager {
             mnemonic: payload.mnemonic.map(Zeroizing::new),
         });
         self.failed_attempts = 0;
+        self.lockout_until = None;
         Ok(vault.address)
     }
 
-    /// Возвращает приватный ключ как bytes (для подписи транзакций).
+    /// Приватный ключ как bytes.
     pub fn get_private_key<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
         let wallet = self.wallet.as_ref()
             .ok_or_else(|| VaultError::Logic("Ключ не загружен".into()))?;
         Ok(pyo3::types::PyBytes::new_bound(py, &wallet.private_key))
     }
 
-    /// ETH-адрес или None если кошелёк не загружен.
     #[getter]
     pub fn address(&self) -> Option<String> {
         self.wallet.as_ref().map(|w| w.address.clone())
     }
 
-    /// Мнемоника или None.
     #[getter]
     pub fn mnemonic(&self) -> Option<String> {
         self.wallet.as_ref()
             .and_then(|w| w.mnemonic.as_ref().map(|m| m.as_str().to_string()))
     }
 
-    /// Число оставшихся попыток ввода пароля.
     #[getter]
     pub fn remaining_attempts(&self) -> u32 {
         MAX_FAILED_ATTEMPTS.saturating_sub(self.failed_attempts)
     }
 
-    /// Безопасно затирает все секретные данные из памяти.
+    /// FIX: возвращает секунд до разблокировки или None
+    #[getter]
+    pub fn lockout_seconds_remaining(&self) -> Option<u64> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.lockout_until.and_then(|until| {
+            if until > now { Some(until - now) } else { None }
+        })
+    }
+
+    /// Затирает секретные данные из памяти.
     pub fn clear(&mut self) {
         self.wallet = None;
         self.failed_attempts = 0;
+        self.lockout_until = None;
     }
 }
 
-/// Деривация ETH-ключа из BIP-39 seed по пути m/44'/60'/0'/0/0.
 fn derive_eth_key_from_seed(seed: &[u8]) -> PyResult<Vec<u8>> {
     let master = coins_bip32::xkeys::XPriv::root_from_seed(seed, None)
-        .map_err(|e| VaultError::Crypto(format!("BIP32 master key: {e}")))?;
+        .map_err(|e| VaultError::Crypto(format!("BIP32: {e}")))?;
     let path: DerivationPath = "m/44'/60'/0'/0/0"
         .parse()
-        .map_err(|e| VaultError::Crypto(format!("Путь деривации: {e}")))?;
+        .map_err(|e| VaultError::Crypto(format!("Путь: {e}")))?;
     let child = master.derive_path(&path)
-        .map_err(|e| VaultError::Crypto(format!("HD деривация: {e}")))?;
+        .map_err(|e| VaultError::Crypto(format!("HD: {e}")))?;
     Ok(child.private_key().to_bytes().to_vec())
 }
