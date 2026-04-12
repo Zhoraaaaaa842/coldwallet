@@ -153,10 +153,15 @@ class EthNetwork:
 
         return result
 
-    def broadcast_transaction(self, raw_tx_hex: str) -> str:
+    def broadcast_transaction(self, raw_tx_hex: str) -> Dict[str, Any]:
         """
         Отправляет подписанную транзакцию в сеть.
-        Возвращает TX hash.
+        Ждёт receipt и возвращает реальный статус:
+          - status: 1 = успех, 0 = revert, None = таймаут/ошибка
+          - tx_hash: хэш транзакции
+          - block: номер блока (если подтверждена)
+          - gas_used: использованный газ
+          - error: описание ошибки (если есть)
         """
         self._require_connection()
 
@@ -164,7 +169,26 @@ class EthNetwork:
             raw_tx_hex = "0x" + raw_tx_hex
 
         tx_hash = self._w3.eth.send_raw_transaction(bytes.fromhex(raw_tx_hex[2:]))
-        return tx_hash.hex()
+        tx_hash_hex = tx_hash.hex()
+
+        try:
+            receipt = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            return {
+                "tx_hash": tx_hash_hex,
+                "status": receipt.get("status"),   # 1 = успех, 0 = revert
+                "block": receipt.get("blockNumber"),
+                "gas_used": receipt.get("gasUsed"),
+                "error": None,
+            }
+        except Exception as e:
+            # TX попала в mempool, но подтверждения не было в течение 120 сек
+            return {
+                "tx_hash": tx_hash_hex,
+                "status": None,
+                "block": None,
+                "gas_used": None,
+                "error": str(e),
+            }
 
     def get_transaction_receipt(self, tx_hash: str) -> Optional[Dict]:
         """Получает receipt транзакции (или None если pending)."""
