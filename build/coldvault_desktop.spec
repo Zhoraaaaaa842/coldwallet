@@ -2,7 +2,7 @@
 """
 ColdVault Desktop — PyInstaller spec.
 Сборка: pyinstaller build/coldvault_desktop.spec
-Результат: dist/ColdVault.exe
+Результат: dist/ZhoraWallet.exe
 """
 
 import os
@@ -22,12 +22,10 @@ a = Analysis(
     pathex=[PROJECT_ROOT],
     binaries=[],
     datas=[
-        # Пакеты проекта
         (os.path.join(PROJECT_ROOT, 'cold_wallet'), 'cold_wallet'),
         (os.path.join(PROJECT_ROOT, 'desktop_app'), 'desktop_app'),
     ],
     hiddenimports=[
-        # Ethereum
         'eth_account',
         'eth_account._utils',
         'eth_account._utils.signing',
@@ -53,14 +51,12 @@ a = Analysis(
         'rlp',
         'cytoolz',
         'toolz',
-        # Web3
         'web3',
         'web3.auto',
         'web3.eth',
         'web3.middleware',
         'web3.providers',
         'web3.providers.rpc',
-        # Cryptography
         'cryptography',
         'cryptography.hazmat',
         'cryptography.hazmat.primitives',
@@ -70,15 +66,12 @@ a = Analysis(
         'cryptography.hazmat.primitives.kdf.pbkdf2',
         'cryptography.hazmat.primitives.hashes',
         'cryptography.hazmat.backends',
-        # Mnemonic
         'mnemonic',
-        # PyQt6
         'PyQt6',
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         'PyQt6.sip',
-        # Прочее
         'json',
         'decimal',
         'pathlib',
@@ -113,18 +106,18 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ColdVault',
+    name='ZhoraWallet',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,          # Windowed (без консоли)
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='assets/coldvault.ico',  # Раскомментировать если есть .ico
+    # icon='assets/coldvault.ico',
 )

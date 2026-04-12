@@ -1,10 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 # ColdVault ETH — USB Installer spec
-# Собирается в: dist/UsbInstaller.exe
+# Собирается в: dist/ZhoraUSB.exe
 
-from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
-import sys
 
 BLOCK_CIPHER = None
 ROOT = Path(SPECPATH).parent
@@ -13,9 +11,7 @@ a = Analysis(
     [str(ROOT / 'installer' / 'usb_installer_gui.py')],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[
-        # Иконки/шрифты если есть
-    ],
+    datas=[],
     hiddenimports=[
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
@@ -51,18 +47,18 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='UsbInstaller',
+    name='ZhoraUSB',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,         # GUI-приложение (без консоли)
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='build/coldvault.ico',   # раскомментируй если есть иконка
-    uac_admin=True,        # Windows: запрос прав администратора
+    # icon='build/coldvault.ico',
+    uac_admin=True,
 )
