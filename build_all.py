@@ -2,10 +2,10 @@
 ColdVault ETH - Master Build Script.
 
 Собирает:
-1. ColdVault.exe      - Desktop кошелёк (PyQt6, windowed)
-2. SignOffline.exe    - USB офлайн-подписьик (console)
-3. UsbInstaller.exe  - GUI-установщик кошелька на флешку (windowed)
-4. ColdVault_Setup/   - Итоговый пакет для распространения
+1. ZhoraWallet.exe   - Desktop кошелёк (PyQt6, windowed)
+2. SignOffline.exe   - USB офлайн-подписьик (console)
+3. ZhoraUSB.exe      - GUI-установщик кошелька на флешку (windowed)
+4. ColdVault_Setup/  - Итоговый пакет для распространения
 
 Использование:
     python build_all.py [--desktop-only] [--signer-only] [--installer-only] [--clean]
@@ -26,13 +26,12 @@ SETUP_DIR = DIST_DIR / "ColdVault_Setup"
 
 
 def clean():
-    """Clean previous build artifacts."""
     print("\n  [*] Чистка...")
     for d in [
         DIST_DIR,
-        BUILD_DIR / "ColdVault",
+        BUILD_DIR / "ZhoraWallet",
         BUILD_DIR / "SignOffline",
-        BUILD_DIR / "UsbInstaller",
+        BUILD_DIR / "ZhoraUSB",
     ]:
         if d.exists():
             shutil.rmtree(d)
@@ -44,14 +43,12 @@ def clean():
 
 
 def build_exe(spec_name: str, display_name: str) -> bool:
-    """Build EXE via PyInstaller."""
     spec_path = BUILD_DIR / spec_name
     if not spec_path.exists():
         print(f"  [!] Spec не найден: {spec_path}")
         return False
 
     print(f"  [*] Сборка {display_name}...")
-    print(f"      Spec: {spec_path}")
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -61,12 +58,7 @@ def build_exe(spec_name: str, display_name: str) -> bool:
         "--noconfirm",
     ]
 
-    proc = subprocess.run(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        capture_output=True,
-        text=True,
-    )
+    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True)
 
     if proc.returncode == 0:
         print(f"  [OK] {display_name} собран")
@@ -80,24 +72,22 @@ def build_exe(spec_name: str, display_name: str) -> bool:
 
 
 def create_setup_package():
-    """Create final distribution package."""
     print("\n  [*] Создание дистрибутива...")
-
     SETUP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # --- 1. ColdVault.exe --- #
-    desktop_exe = DIST_DIR / "ColdVault.exe"
-    if desktop_exe.exists():
-        shutil.copy2(desktop_exe, SETUP_DIR / "ColdVault.exe")
-        print("      [OK] ColdVault.exe")
+    # --- ZhoraWallet.exe ---
+    wallet_exe = DIST_DIR / "ZhoraWallet.exe"
+    if wallet_exe.exists():
+        shutil.copy2(wallet_exe, SETUP_DIR / "ZhoraWallet.exe")
+        print("      [OK] ZhoraWallet.exe")
 
-    # --- 2. UsbInstaller.exe --- #
-    usb_installer_exe = DIST_DIR / "UsbInstaller.exe"
-    if usb_installer_exe.exists():
-        shutil.copy2(usb_installer_exe, SETUP_DIR / "UsbInstaller.exe")
-        print("      [OK] UsbInstaller.exe")
+    # --- ZhoraUSB.exe ---
+    usb_exe = DIST_DIR / "ZhoraUSB.exe"
+    if usb_exe.exists():
+        shutil.copy2(usb_exe, SETUP_DIR / "ZhoraUSB.exe")
+        print("      [OK] ZhoraUSB.exe")
 
-    # --- 3. USB_Files/SignOffline.exe --- #
+    # --- USB_Files/SignOffline.exe ---
     usb_dir = SETUP_DIR / "USB_Files"
     usb_dir.mkdir(exist_ok=True)
     signer_exe = DIST_DIR / "SignOffline.exe"
@@ -105,29 +95,22 @@ def create_setup_package():
         shutil.copy2(signer_exe, usb_dir / "SignOffline.exe")
         print("      [OK] SignOffline.exe -> USB_Files/")
 
-    # --- 4. Scripts --- #
+    # --- Scripts ---
     scripts_dir = SETUP_DIR / "Scripts"
     scripts_dir.mkdir(exist_ok=True)
-
-    scripts = [
+    for s in [
         "installer/format_usb.py",
         "installer/install_to_usb.py",
         "installer/sign_offline_exe.py",
         "installer/usb_installer_gui.py",
-    ]
-    for s in scripts:
+    ]:
         src = PROJECT_ROOT / s
         if src.exists():
             shutil.copy2(src, scripts_dir / Path(s).name)
     print("      [OK] Scripts -> Scripts/")
 
-    # --- 5. Core modules --- #
-    core_dst = scripts_dir / "cold_wallet" / "core"
-    core_dst.mkdir(parents=True, exist_ok=True)
-    storage_dst = scripts_dir / "cold_wallet" / "storage"
-    storage_dst.mkdir(parents=True, exist_ok=True)
-
-    core_files = [
+    # --- Core modules ---
+    for cf in [
         "cold_wallet/__init__.py",
         "cold_wallet/core/__init__.py",
         "cold_wallet/core/key_manager.py",
@@ -135,8 +118,7 @@ def create_setup_package():
         "cold_wallet/core/eth_network.py",
         "cold_wallet/storage/__init__.py",
         "cold_wallet/storage/usb_manager.py",
-    ]
-    for cf in core_files:
+    ]:
         src = PROJECT_ROOT / cf
         dst = scripts_dir / cf
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -144,14 +126,14 @@ def create_setup_package():
             shutil.copy2(src, dst)
     print("      [OK] Core modules -> Scripts/cold_wallet/")
 
-    # --- 6. Documentation --- #
+    # --- Docs ---
     for doc in ["README.md", "SECURITY_AUDIT.md", "requirements.txt"]:
         src = PROJECT_ROOT / doc
         if src.exists():
             shutil.copy2(src, SETUP_DIR / doc)
     print("      [OK] Документация")
 
-    # --- 7. INSTALL.bat --- #
+    # --- INSTALL.bat ---
     install_bat = r"""@echo off
 chcp 65001 >nul 2>&1
 title ColdVault ETH - Setup
@@ -163,28 +145,28 @@ echo  ========================================
 echo.
 echo  Выберите действие:
 echo.
-echo    1. Запустить ColdVault Desktop
-echo    2. Установить на USB (графический мастер) — РЕКОМЕНДУЕТСЯ
-echo    3. Установить на USB (командная строка, без форматирования)
+echo    1. Запустить ZhoraWallet (десктоп-кошелёк)
+echo    2. Установить на USB через ZhoraUSB (графический мастер) — РЕКОМЕНДУЕТСЯ
+echo    3. Установить на USB (без форматирования, командная строка)
 echo    4. Выход
 echo.
 set /p choice="  Ваш выбор (1-4): "
 
 if "%choice%"=="1" (
-    if exist "%~dp0ColdVault.exe" (
-        start "" "%~dp0ColdVault.exe"
+    if exist "%~dp0ZhoraWallet.exe" (
+        start "" "%~dp0ZhoraWallet.exe"
     ) else (
-        echo  [!] ColdVault.exe не найден.
+        echo  [!] ZhoraWallet.exe не найден.
     )
     goto end
 )
 
 if "%choice%"=="2" (
-    if exist "%~dp0UsbInstaller.exe" (
-        echo  [*] Запуск графического установщика...
-        start "" "%~dp0UsbInstaller.exe"
+    if exist "%~dp0ZhoraUSB.exe" (
+        echo  [*] Запуск установщика...
+        start "" "%~dp0ZhoraUSB.exe"
     ) else (
-        echo  [!] UsbInstaller.exe не найден.
+        echo  [!] ZhoraUSB.exe не найден.
     )
     goto end
 )
@@ -207,45 +189,33 @@ pause
     with open(SETUP_DIR / "INSTALL.bat", "w", encoding="utf-8") as f:
         f.write(install_bat)
     print("      [OK] INSTALL.bat")
-
     print(f"\n  [OK] Дистрибутив готов: {SETUP_DIR}")
 
 
 def print_summary():
-    """Print build summary."""
     print()
     print("  ========================================")
     print("         СБОРКА ЗАВЕРШЕНА!")
     print("  ========================================")
 
-    desktop = DIST_DIR / "ColdVault.exe"
-    signer = DIST_DIR / "SignOffline.exe"
-    installer = DIST_DIR / "UsbInstaller.exe"
-
-    if desktop.exists():
-        size_mb = desktop.stat().st_size / (1024 * 1024)
-        print(f"  ColdVault.exe      - {size_mb:>6.1f} MB  (десктоп)")
-    else:
-        print("  ColdVault.exe      - НЕ СОБРАН")
-
-    if signer.exists():
-        size_mb = signer.stat().st_size / (1024 * 1024)
-        print(f"  SignOffline.exe    - {size_mb:>6.1f} MB  (USB-подписьик)")
-    else:
-        print("  SignOffline.exe    - НЕ СОБРАН")
-
-    if installer.exists():
-        size_mb = installer.stat().st_size / (1024 * 1024)
-        print(f"  UsbInstaller.exe  - {size_mb:>6.1f} MB  (установщик флешки)")
-    else:
-        print("  UsbInstaller.exe  - НЕ СОБРАН")
+    for exe_name, label in [
+        ("ZhoraWallet.exe", "десктоп-кошелёк"),
+        ("SignOffline.exe",  "USB-подписьик"),
+        ("ZhoraUSB.exe",     "установщик флешки"),
+    ]:
+        p = DIST_DIR / exe_name
+        if p.exists():
+            mb = p.stat().st_size / (1024 * 1024)
+            print(f"  {exe_name:<20} - {mb:>6.1f} MB  ({label})")
+        else:
+            print(f"  {exe_name:<20} - НЕ СОБРАН")
 
     print()
     print("  Дистрибутив: dist/ColdVault_Setup/")
     print("  ----------------------------------------")
     print("  dist/ColdVault_Setup/")
-    print("  |-- ColdVault.exe       - десктоп-приложение")
-    print("  |-- UsbInstaller.exe    - установка на флешку (GUI)")
+    print("  |-- ZhoraWallet.exe     - десктоп-приложение")
+    print("  |-- ZhoraUSB.exe        - установка на флешку (GUI)")
     print("  |-- INSTALL.bat         - мастер установки")
     print("  |-- USB_Files/")
     print("  |   +-- SignOffline.exe  - для флешки")
@@ -282,19 +252,16 @@ def main():
 
     success = True
 
-    # --- ColdVault.exe ---
     if not args.signer_only and not args.installer_only:
-        if not build_exe("coldvault_desktop.spec", "ColdVault"):
+        if not build_exe("coldvault_desktop.spec", "ZhoraWallet"):
             success = False
 
-    # --- SignOffline.exe ---
     if not args.desktop_only and not args.installer_only:
         if not build_exe("sign_offline.spec", "SignOffline"):
             success = False
 
-    # --- UsbInstaller.exe ---
     if not args.desktop_only and not args.signer_only:
-        if not build_exe("usb_installer.spec", "UsbInstaller"):
+        if not build_exe("usb_installer.spec", "ZhoraUSB"):
             success = False
 
     if success:
