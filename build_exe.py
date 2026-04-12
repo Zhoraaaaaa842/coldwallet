@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZhoraWallet ETH — Скрипт сборки EXE.
+ZhoraWallet ETH — Сборка EXE с реальным прогрессом.
 
 Использование:
     python build_exe.py
@@ -37,29 +37,25 @@ BANNER = f"""
 {DIM}           ─────────────────────────────────────────────{R}
 """
 
-STEPS = [
-    (3,  "Проверка окружения Python..."),
-    (7,  "Проверка зависимостей (PyQt6, web3, eth_account)..."),
-    (12, "Инициализация PyInstaller..."),
-    (18, "Анализ импортов и зависимостей..."),
-    (25, "Сбор модулей cold_wallet.core..."),
-    (33, "Сбор модулей cold_wallet.storage..."),
-    (40, "Сбор модулей desktop_app..."),
-    (48, "Упаковка ресурсов..."),
-    (55, "Компиляция Python → байткод..."),
-    (63, "Линковка нативных библиотек..."),
-    (70, "Упаковка PyQt6 runtime..."),
-    (77, "Упаковка web3 & cryptography..."),
-    (83, "Оптимизация бинарника (UPX)..."),
-    (89, "Подпись файла..."),
-    (94, "Финальная проверка..."),
-    (98, "Запись EXE на диск..."),
-    (100, "Готово!"),
+# Ключевые фразы из вывода PyInstaller → (процент, описание)
+PROGRESS_MAP = [
+    ("run Analysis",             3,  "Анализ импортов..."),
+    ("Analyzing",                8,  "Анализ зависимостей..."),
+    ("Collecting submodules",    15, "Сбор субмодулей..."),
+    ("Collecting data files",    22, "Сбор дата-файлов..."),
+    ("Processing pre-find",      28, "Предобработка модулей..."),
+    ("Looking for ctypes",       33, "Поиск ctypes-зависимостей..."),
+    ("Processing post-find",     38, "Постобработка модулей..."),
+    ("Building PKG",             45, "Сборка PKG-архива..."),
+    ("Bootloader",               52, "Добавление bootloader..."),
+    ("Warnings",                 57, "Проверка предупреждений..."),
+    ("Building EXE",             65, "Сборка EXE-файла..."),
+    ("Appending PKG archive",    75, "Упаковка PKG в EXE..."),
+    ("Fixing EXE headers",       82, "Исправление заголовков EXE..."),
+    ("Copying icons",            87, "Установка иконки..."),
+    ("Building EXE from",        92, "Финализация EXE..."),
+    ("successfully built",       98, "Запись на диск..."),
 ]
-
-
-def clear():
-    os.system("cls" if os.name == "nt" else "clear")
 
 
 def render_bar(pct: int, width: int = 45) -> str:
@@ -69,29 +65,13 @@ def render_bar(pct: int, width: int = 45) -> str:
     return f"{color}{B}[{bar}]{R} {B}{pct:>3}%{R}"
 
 
-def animate(done_event: threading.Event):
-    print(BANNER)
-    start = time.time()
-    prev  = 0
-    for (target, msg) in STEPS:
-        for p in range(prev, target + 1):
-            elapsed = time.time() - start
-            sys.stdout.write(
-                f"\r  {render_bar(p)}  {DIM}{msg[:50]:<52}{R}  {DIM}{elapsed:.1f}s{R}  "
-            )
-            sys.stdout.flush()
-            time.sleep(0.015)
-        elapsed = time.time() - start
-        tick = f"{G}✔{R}" if target == 100 else f"{C}•{R}"
-        print(f"\r  {render_bar(target)}  {tick} {msg:<52} {DIM}{elapsed:.1f}s{R}")
-        prev = target
-        time.sleep(0.12)
-        if done_event.is_set():
-            break
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
 
 
 def build():
     clear()
+    print(BANNER)
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -129,27 +109,62 @@ def build():
     ]
 
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build_log.txt")
+    cwd      = os.path.dirname(os.path.abspath(__file__))
 
-    done_event = threading.Event()
-    anim_thread = threading.Thread(target=animate, args=(done_event,), daemon=True)
-    anim_thread.start()
+    proc = subprocess.Popen(
+        cmd, cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        bufsize=1,
+    )
 
-    with open(log_path, "w", encoding="utf-8") as log_file:
-        proc = subprocess.run(
-            cmd,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=log_file,
-            stderr=log_file,
-        )
+    pct      = 0
+    msg      = "Инициализация PyInstaller..."
+    start    = time.time()
+    log_lines = []
 
-    done_event.set()
-    anim_thread.join()
+    for raw_line in proc.stdout:
+        line = raw_line.strip()
+        log_lines.append(line)
+
+        # Определяем процент по ключевым фразам
+        for keyword, target_pct, label in PROGRESS_MAP:
+            if keyword.lower() in line.lower() and target_pct > pct:
+                # Плавно догоняем до target_pct
+                for p in range(pct + 1, target_pct + 1):
+                    elapsed = time.time() - start
+                    sys.stdout.write(
+                        f"\r  {render_bar(p)}  {DIM}{label[:52]:<54}{R}  {DIM}{elapsed:.1f}s{R}  "
+                    )
+                    sys.stdout.flush()
+                    time.sleep(0.02)
+                elapsed = time.time() - start
+                print(f"\r  {render_bar(target_pct)}  {C}•{R} {label:<54} {DIM}{elapsed:.1f}s{R}")
+                pct = target_pct
+                msg = label
+                break
+
+    proc.wait()
+
+    # Сохраняем лог
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(log_lines))
 
     if proc.returncode == 0:
-        total = 0
+        # Догоняем до 100%
+        for p in range(pct + 1, 101):
+            elapsed = time.time() - start
+            sys.stdout.write(
+                f"\r  {render_bar(p)}  {DIM}Готово!{R}  {DIM}{elapsed:.1f}s{R}  "
+            )
+            sys.stdout.flush()
+            time.sleep(0.015)
+        elapsed = time.time() - start
+        print(f"\r  {render_bar(100)}  {G}✔{R} Готово!{' ' * 50} {DIM}{elapsed:.1f}s{R}")
         print(f"""
 {G}{B}  ══════════════════════════════════════════════════════════{R}
-{G}{B}  ✔  ZhoraWallet.exe успешно собран!{R}
+{G}{B}  ✔  ZhoraWallet.exe успешно собран за {elapsed:.1f}s{R}
 {G}{B}  ══════════════════════════════════════════════════════════{R}
 
   {DIM}Путь:{R}      {B}dist/ZhoraWallet.exe{R}
@@ -158,10 +173,16 @@ def build():
   {Y}★  Запусти:  dist\\ZhoraWallet.exe{R}
 """)
     else:
+        elapsed = time.time() - start
         print(f"""
-{RD}{B}  [!] Ошибка сборки! returncode={proc.returncode}{R}
-  {DIM}Подробности в файле:{R} {B}build_log.txt{R}
+{RD}{B}  [!] Ошибка сборки! (returncode={proc.returncode}, {elapsed:.1f}s){R}
+  {DIM}Подробности:{R} {B}build_log.txt{R}
 """)
+        # Покажем последние 20 строк лога
+        tail = log_lines[-20:] if len(log_lines) >= 20 else log_lines
+        print(f"{RD}── Последние строки лога ──{R}")
+        for l in tail:
+            print(f"  {DIM}{l}{R}")
         sys.exit(1)
 
 
