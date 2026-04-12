@@ -1,22 +1,14 @@
 """
-ZhoraWallet ETH — USB Storage Manager.
-Обнаружение флешки, установка структуры кошелька, чтение/запись.
+ZhoraWallet ETH — Storage Manager.
+Обнаружение внешних USB/HDD-носителей, установка структуры кошелька, чтение/запись.
+Поддерживает USB-флешки, внешние HDD/SSD любого размера.
 """
 
 import os
-import sys
 import json
 import platform
-import shutil
 from pathlib import Path
 from typing import Optional, List, Dict
-
-# Структура папок на USB:
-# /ColdVault/
-# ├── wallet.vault        # Зашифрованный кошелёк
-# ├── config.json         # Конфигурация
-# ├── pending/            # Неподписанные транзакции
-# └── signed/             # Подписанные транзакции
 
 VAULT_DIR   = "ColdVault"
 WALLET_FILE = "wallet.vault"
@@ -24,14 +16,18 @@ CONFIG_FILE = "config.json"
 PENDING_DIR = "pending"
 SIGNED_DIR  = "signed"
 
-# Типы дисков Windows, которые считаются USB-носителями
-# 2 = DRIVE_REMOVABLE (классические USB)
-# 3 = DRIVE_FIXED     (некоторые флешки и внешние SSD определяются так)
-USB_DRIVE_TYPES_WINDOWS = {2, 3}
+# Системные буквы Windows, которые никогда не являются внешними носителями
+_WINDOWS_SYSTEM_LETTERS = {"C"}
+
+# Системные точки монтирования Linux/macOS
+_SYSTEM_MOUNTS = {"/", "/boot", "/boot/efi", "/home", "/usr", "/var", "/tmp", "/sys", "/proc"}
 
 
 class USBManager:
-    """Управление файловой структурой кошелька на USB."""
+    """
+    Управление файловой структурой кошелька на внешнем носителе.
+    Работает с USB-флешками и внешними HDD/SSD любого размера.
+    """
 
     def __init__(self, usb_path: Optional[str] = None):
         self._usb_path = usb_path
@@ -58,15 +54,16 @@ class USBManager:
             and (self._vault_path / WALLET_FILE).exists()
         )
 
-    # ─── Обнаружение USB ───
+    # ─── Обнаружение дисков ───
 
     @staticmethod
     def detect_usb_drives() -> List[Dict[str, str]]:
         """
-        Обнаруживает подключённые USB-накопители.
-        Возвращает [{"path": ..., "label": ..., "size": ...}]
+        Обнаруживает внешние носители: USB-флешки и внешние HDD/SSD.
+        Возвращает [{"path": ..., "label": ..., "size": ..., "kind": ...}]
         """
         system = platform.system()
+        drives = []
         try:
             if system == "Windows":
                 drives = USBManager._detect_windows()
@@ -74,12 +71,10 @@ class USBManager:
                 drives = USBManager._detect_linux()
             elif system == "Darwin":
                 drives = USBManager._detect_macos()
-            else:
-                drives = []
         except Exception:
-            drives = []
+            pass
 
-        # Если ctypes/proc не сработали — пробуем psutil
+        # Фоллбэк: psutil если основной метод не нашёл ничего
         if not drives:
             drives = USBManager._detect_psutil()
 
@@ -87,7 +82,12 @@ class USBManager:
 
     @staticmethod
     def _detect_windows() -> List[Dict[str, str]]:
-        """Детекция USB на Windows через ctypes."""
+        """
+        Windows: принимаем все диски кроме системных (C:).
+        Типы:
+          2 = DRIVE_REMOVABLE  — классические USB-флешки
+          3 = DRIVE_FIXED      — внешние HDD/SSD, некоторые USB-носители
+        """
         drives = []
         try:
             import ctypes
@@ -96,15 +96,17 @@ class USBManager:
                 if not (bitmask & (1 << letter_idx)):
                     continue
                 letter = chr(65 + letter_idx)
+
+                # Системные буквы — скип
+                if letter in _WINDOWS_SYSTEM_LETTERS:
+                    continue
+
                 drive_path = f"{letter}:\\"
                 drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive_path)
 
-                # 2 = DRIVE_REMOVABLE, 3 = DRIVE_FIXED (некоторые USB)
-                if drive_type not in USB_DRIVE_TYPES_WINDOWS:
-                    continue
-
-                # Пропускаем C:\ (системный диск)
-                if letter == "C":
+                # Принимаем REMOVABLE (2) и FIXED (3)
+                # CDROM(5), RAMDISK(6), UNKNOWN(0), NO_ROOT(1), REMOTE(4) — игнорируем
+                if drive_type not in (2, 3):
                     continue
 
                 # Метка тома
@@ -113,7 +115,7 @@ class USBManager:
                     drive_path, vol_name, 1024,
                     None, None, None, None, 0
                 )
-                label = vol_name.value or f"USB ({letter}:)"
+                label = vol_name.value or f"Диск ({letter}:)"
 
                 # Размер
                 total_bytes = ctypes.c_ulonglong(0)
@@ -123,16 +125,15 @@ class USBManager:
                     None
                 )
                 size_gb = total_bytes.value / (1024 ** 3)
-
-                # Игнорируем диски > 2 TB (вряд ли это USB)
-                if size_gb > 2048:
+                if size_gb == 0:
                     continue
 
+                kind = "USB" if drive_type == 2 else "HDD/SSD"
                 drives.append({
                     "path": drive_path,
                     "label": label,
                     "size": f"{size_gb:.1f} GB",
-                    "type": str(drive_type),
+                    "kind": kind,
                 })
         except Exception:
             pass
@@ -140,9 +141,12 @@ class USBManager:
 
     @staticmethod
     def _detect_linux() -> List[Dict[str, str]]:
-        """Детекция USB на Linux через /proc/mounts."""
+        """
+        Linux: сканируем /proc/mounts.
+        Берём /media, /mnt, /run/media — туда монтируются все внешние носители.
+        """
         drives = []
-        mount_points = ["/media", "/mnt", "/run/media"]
+        mount_points = ("/media", "/mnt", "/run/media")
         try:
             with open("/proc/mounts", "r") as f:
                 for line in f:
@@ -152,74 +156,92 @@ class USBManager:
                     device, mount = parts[0], parts[1]
                     if not any(mount.startswith(mp) for mp in mount_points):
                         continue
-                    label = os.path.basename(mount)
+                    label = os.path.basename(mount) or device
                     try:
                         stat = os.statvfs(mount)
                         size_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
                         size_str = f"{size_gb:.1f} GB"
                     except Exception:
                         size_str = "N/A"
-                    drives.append({"path": mount, "label": label, "size": size_str})
+                    # Определяем тип по устройству (sdа = HDD/USB, sdа* = раздел)
+                    kind = "HDD/SSD" if "/sd" in device else "USB"
+                    drives.append({
+                        "path": mount,
+                        "label": label,
+                        "size": size_str,
+                        "kind": kind,
+                    })
         except Exception:
             pass
         return drives
 
     @staticmethod
     def _detect_macos() -> List[Dict[str, str]]:
-        """Детекция USB на macOS через /Volumes."""
+        """
+        macOS: сканируем /Volumes.
+        Берём всё кроме системных томов (без лимита по размеру).
+        """
         drives = []
+        system_volumes = {"Macintosh HD", "Macintosh HD - Data", "Preboot", "Recovery", "VM"}
         volumes = Path("/Volumes")
         if not volumes.exists():
             return drives
         for vol in volumes.iterdir():
-            if not vol.is_dir() or vol.name == "Macintosh HD":
+            if not vol.is_dir() or vol.name in system_volumes:
                 continue
             try:
                 stat = os.statvfs(str(vol))
                 size_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
-                if 0 < size_gb < 256:
-                    drives.append({
-                        "path": str(vol),
-                        "label": vol.name,
-                        "size": f"{size_gb:.1f} GB",
-                    })
+                if size_gb <= 0:
+                    continue
+                kind = "HDD/SSD" if size_gb > 64 else "USB"
+                drives.append({
+                    "path": str(vol),
+                    "label": vol.name,
+                    "size": f"{size_gb:.1f} GB",
+                    "kind": kind,
+                })
             except Exception:
                 pass
         return drives
 
     @staticmethod
     def _detect_psutil() -> List[Dict[str, str]]:
-        """Фоллбэк через psutil — работает на всех ОС."""
+        """
+        Фоллбэк через psutil — работает на всех ОС.
+        Принимает все несистемные диски без ограничения по размеру.
+        """
         drives = []
         try:
             import psutil
+            sys_name = platform.system()
             for part in psutil.disk_partitions(all=False):
-                # Фильтр: removable или не системный диск
-                opts = part.opts.lower()
-                is_removable = "removable" in opts
-                is_system = part.mountpoint in ("/", "C:\\", "/boot", "/boot/efi")
-                if is_system:
+                mp = part.mountpoint
+
+                # Скипаем системные точки монтирования
+                if mp in _SYSTEM_MOUNTS:
                     continue
-                # на Windows берём все не-C: диски < 2TB
-                # на Linux/macOS берём только отмонтированные в /media, /mnt, /Volumes
-                if not is_removable:
-                    mp = part.mountpoint
-                    valid_prefixes = ("/media", "/mnt", "/run/media", "/Volumes")
-                    if platform.system() == "Windows":
-                        if part.mountpoint.startswith("C:"):
-                            continue
-                    elif not any(mp.startswith(p) for p in valid_prefixes):
+                if sys_name == "Windows" and mp.upper().startswith("C:"):
+                    continue
+
+                # На Linux/macOS берём только внешние точки монтирования
+                if sys_name != "Windows":
+                    valid = ("/media", "/mnt", "/run/media", "/Volumes")
+                    if not any(mp.startswith(p) for p in valid):
                         continue
+
                 try:
-                    usage = psutil.disk_usage(part.mountpoint)
+                    usage = psutil.disk_usage(mp)
                     size_gb = usage.total / (1024 ** 3)
-                    if size_gb > 2048:
+                    if size_gb <= 0:
                         continue
-                    label = os.path.basename(part.mountpoint) or part.device
+                    label = os.path.basename(mp) or part.device or mp
+                    kind = "HDD/SSD" if size_gb > 64 else "USB"
                     drives.append({
-                        "path": part.mountpoint,
-                        "label": label or f"USB ({part.mountpoint})",
+                        "path": mp,
+                        "label": label,
                         "size": f"{size_gb:.1f} GB",
+                        "kind": kind,
                     })
                 except Exception:
                     pass
@@ -227,21 +249,19 @@ class USBManager:
             pass
         return drives
 
-    # ─── Установка и инициализация ───
+    # ─── Установка ───
 
     def set_usb_path(self, path: str) -> None:
-        """Устанавливает путь к USB."""
+        """Устанавливает путь к носителю."""
         if not os.path.isdir(path):
             raise ValueError(f"Путь не существует: {path}")
         self._usb_path = path
         self._vault_path = Path(path) / VAULT_DIR
 
     def initialize_usb(self) -> None:
-        """
-        Создаёт структуру ColdVault на USB.
-        """
+        """Создаёт структуру ColdVault на носителе."""
         if not self._vault_path:
-            raise RuntimeError("USB путь не установлен")
+            raise RuntimeError("Путь к носителю не установлен")
 
         self._vault_path.mkdir(parents=True, exist_ok=True)
         (self._vault_path / PENDING_DIR).mkdir(parents=True, exist_ok=True)
@@ -261,10 +281,7 @@ class USBManager:
 
     @staticmethod
     def ensure_dist_dir() -> Path:
-        """
-        Гарантирует существование папки dist/ в корне проекта.
-        Возвращает Path к dist/.
-        """
+        """Гарантирует существование dist/ в корне проекта."""
         root = Path(__file__).resolve().parent.parent.parent
         dist = root / "dist"
         dist.mkdir(parents=True, exist_ok=True)
@@ -273,75 +290,58 @@ class USBManager:
     # ─── Чтение / запись ───
 
     def save_pending_tx(self, tx_json: str, filename: str) -> Path:
-        """Сохраняет неподписанную TX на USB."""
         if not self._vault_path:
-            raise RuntimeError("USB не инициализирован")
-        pending_path = self._vault_path / PENDING_DIR / filename
-        with open(pending_path, "w", encoding="utf-8") as f:
-            f.write(tx_json)
-        return pending_path
+            raise RuntimeError("USB/HDD не инициализирован")
+        p = self._vault_path / PENDING_DIR / filename
+        p.write_text(tx_json, encoding="utf-8")
+        return p
 
     def save_signed_tx(self, raw_tx_hex: str, filename: str) -> Path:
-        """Сохраняет подписанную TX на USB."""
         if not self._vault_path:
-            raise RuntimeError("USB не инициализирован")
-        signed_data = {
+            raise RuntimeError("USB/HDD не инициализирован")
+        data = {
             "type": "signed_transaction",
             "version": 1,
             "raw_tx": raw_tx_hex,
             "signed_at": self._get_timestamp(),
         }
-        signed_path = self._vault_path / SIGNED_DIR / filename
-        with open(signed_path, "w", encoding="utf-8") as f:
-            json.dump(signed_data, f, indent=2, ensure_ascii=False)
-        return signed_path
+        p = self._vault_path / SIGNED_DIR / filename
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return p
 
     def list_pending_txs(self) -> List[str]:
-        """Список файлов неподписанных TX."""
         if not self._vault_path:
             return []
-        pending_dir = self._vault_path / PENDING_DIR
-        if not pending_dir.exists():
-            return []
-        return [f.name for f in pending_dir.glob("*.json")]
+        d = self._vault_path / PENDING_DIR
+        return [f.name for f in d.glob("*.json")] if d.exists() else []
 
     def list_signed_txs(self) -> List[str]:
-        """Список файлов подписанных TX."""
         if not self._vault_path:
             return []
-        signed_dir = self._vault_path / SIGNED_DIR
-        if not signed_dir.exists():
-            return []
-        return [f.name for f in signed_dir.glob("*.json")]
+        d = self._vault_path / SIGNED_DIR
+        return [f.name for f in d.glob("*.json")] if d.exists() else []
 
     def read_pending_tx(self, filename: str) -> str:
-        path = self._vault_path / PENDING_DIR / filename
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+        return (self._vault_path / PENDING_DIR / filename).read_text(encoding="utf-8")
 
     def read_signed_tx(self, filename: str) -> Dict:
-        path = self._vault_path / SIGNED_DIR / filename
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads((self._vault_path / SIGNED_DIR / filename).read_text(encoding="utf-8"))
 
     def delete_pending_tx(self, filename: str) -> None:
-        path = self._vault_path / PENDING_DIR / filename
-        if path.exists():
-            path.unlink()
+        p = self._vault_path / PENDING_DIR / filename
+        if p.exists():
+            p.unlink()
 
     def get_config(self) -> Dict:
-        config_path = self._vault_path / CONFIG_FILE
-        if config_path and config_path.exists():
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+        p = self._vault_path / CONFIG_FILE
+        return json.loads(p.read_text(encoding="utf-8")) if p and p.exists() else {}
 
     def update_config(self, updates: Dict) -> None:
         config = self.get_config()
         config.update(updates)
-        config_path = self._vault_path / CONFIG_FILE
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        (self._vault_path / CONFIG_FILE).write_text(
+            json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     @staticmethod
     def _get_timestamp() -> str:
