@@ -1695,9 +1695,10 @@ class ColdVaultMainWindow(QMainWindow):
                 max_priority_fee_per_gas = None
                 gas_price = int(self._gas_price_input.value() * 10**9)
 
+            # FIX: используем value= вместо value_wei= для совместимости с Rust TransactionRequest
             tx_req = TransactionRequest(
                 to=to,
-                value_wei=value_wei,
+                value=value_wei,
                 nonce=self._current_nonce,
                 chain_id=self._eth.chain_id or 1,
                 gas_limit=int(self._gas_limit_input.value()),
