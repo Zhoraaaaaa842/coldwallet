@@ -3,6 +3,17 @@ ZhoraWallet ETH — Python-обёртка над Rust TransactionSigner.
 
 Если Rust-крейт собран — используем его.
 Иначе — fallback на Python-реализацию через eth_account.
+
+Типы PyO3 полей Rust TransactionRequest (core-rust/src/transaction.rs):
+  to: String
+  value: String          <- hex строка "0x..."
+  gas_limit: u64         <- int
+  nonce: u64             <- int
+  chain_id: u64          <- int
+  max_fee_per_gas: Option<String>          <- hex строка
+  max_priority_fee_per_gas: Option<String> <- hex строка
+  gas_price: Option<String>               <- hex строка
+  data: Option<String>                    <- hex строка
 """
 
 try:
@@ -21,12 +32,9 @@ from eth_account import Account
 from eth_account.datastructures import SignedTransaction
 
 
-def _to_hex(value: int) -> str:
-    """
-    Преобразует int в hex-строку для PyO3-полей U256/u64.
-    Rust-обёртки (coldvault_core) принимают числовые поля как строки "0x...".
-    """
-    return hex(value)
+def _int_to_hex(value: int) -> str:
+    """int -> hex-строка для Rust полей String (value, fees)."""
+    return hex(value)  # например: 1000000 -> "0x0f4240"
 
 
 @dataclass
@@ -65,25 +73,32 @@ class TransactionRequest:
     def to_rust(self):
         """
         Конвертирует в Rust TransactionRequest.
-        PyO3-поля U256/u64 принимают числа как hex-строки "0x...".
+
+        Точные типы из core-rust/src/transaction.rs:
+          value, max_fee_per_gas, max_priority_fee_per_gas, gas_price, data -> String (hex)
+          gas_limit, nonce, chain_id -> u64 (int)
         """
         if not _RUST_AVAILABLE:
             return self
+
         kwargs = {
-            "to": self.to,
-            "value": _to_hex(self.value),
-            "gas_limit": _to_hex(self.gas_limit),
-            "nonce": _to_hex(self.nonce),
-            "chain_id": _to_hex(self.chain_id),
+            "to":        self.to,                    # str
+            "value":     _int_to_hex(self.value),    # String (hex)
+            "gas_limit": int(self.gas_limit),        # u64
+            "nonce":     int(self.nonce),            # u64
+            "chain_id":  int(self.chain_id),         # u64
         }
         if self.max_fee_per_gas is not None:
-            kwargs["max_fee_per_gas"] = _to_hex(self.max_fee_per_gas)
+            kwargs["max_fee_per_gas"] = _int_to_hex(self.max_fee_per_gas)           # String
         if self.max_priority_fee_per_gas is not None:
-            kwargs["max_priority_fee_per_gas"] = _to_hex(self.max_priority_fee_per_gas)
+            kwargs["max_priority_fee_per_gas"] = _int_to_hex(self.max_priority_fee_per_gas)  # String
         if self.gas_price is not None:
-            kwargs["gas_price"] = _to_hex(self.gas_price)
+            kwargs["gas_price"] = _int_to_hex(self.gas_price)   # String
         if self.data:
-            kwargs["data"] = self.data
+            # data -> Option<String> hex
+            data_hex = self.data.hex() if isinstance(self.data, bytes) else str(self.data)
+            kwargs["data"] = data_hex
+
         return _RustTransactionRequest(**kwargs)
 
 
