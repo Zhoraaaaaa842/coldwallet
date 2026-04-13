@@ -48,3 +48,8 @@ htmlcov/
 zhorawallet-tauri/src/src-tauri/target/
 **/target/
 node_modules/
+
+# Claude/AI tools
+.claude/
+.qwen/
+claude_free.bat
