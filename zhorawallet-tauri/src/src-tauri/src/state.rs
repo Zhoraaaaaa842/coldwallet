@@ -23,6 +23,7 @@ impl Default for WalletState {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UsbTransaction {
     pub id: String,
     pub path: String,

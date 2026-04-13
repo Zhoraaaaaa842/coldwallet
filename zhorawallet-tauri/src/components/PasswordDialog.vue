@@ -1,43 +1,46 @@
 <template>
-  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-bg-secondary rounded-2xl border border-border p-6 w-96">
-      <h2 class="text-xl font-bold text-text-primary mb-4">
+  <div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+    <div class="bg-bg-card rounded-2xl border border-border p-8 w-[420px] shadow-2xl">
+      <h2 class="text-2xl font-bold text-white mb-2">
         {{ mode === 'unlock' ? 'Разблокировать кошелёк' : mode === 'create' ? 'Создать пароль' : 'Импорт кошелька' }}
       </h2>
-      
-      <form @submit.prevent="handleSubmit" class="space-y-4">
+      <p class="text-text-secondary text-sm mb-6">
+        {{ mode === 'unlock' ? 'Введите пароль для доступа к кошельку' : 'Создайте надежный пароль для защиты' }}
+      </p>
+
+      <form @submit.prevent="handleSubmit" class="space-y-5">
         <div>
-          <label class="block text-sm text-text-secondary mb-2">Пароль</label>
+          <label class="block text-sm font-medium text-text-secondary mb-2">Пароль</label>
           <input
             v-model="password"
             type="password"
             class="input-field"
-            placeholder="Введите пароль"
+            placeholder="••••••••"
             ref="passwordInput"
             required
           />
         </div>
 
         <div v-if="mode === 'create'">
-          <label class="block text-sm text-text-secondary mb-2">Подтвердите пароль</label>
+          <label class="block text-sm font-medium text-text-secondary mb-2">Подтвердите пароль</label>
           <input
             v-model="passwordConfirm"
             type="password"
             class="input-field"
-            placeholder="Повторите пароль"
+            placeholder="••••••••"
             required
           />
         </div>
 
-        <div v-if="error" class="text-error text-sm">
-          {{ error }}
+        <div v-if="error" class="bg-error/10 border border-error/30 rounded-lg p-3">
+          <p class="text-error text-sm">{{ error }}</p>
         </div>
 
-        <div class="flex gap-3">
-          <button type="submit" class="btn-primary flex-1">
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="flex-1 bg-white hover:bg-gray-200 text-black font-semibold px-6 py-3 rounded-lg transition-all duration-200">
             {{ mode === 'unlock' ? 'Разблокировать' : 'Продолжить' }}
           </button>
-          <button type="button" @click="$emit('cancel')" class="btn-secondary flex-1">
+          <button type="button" @click="$emit('cancel')" class="flex-1 bg-bg-tertiary hover:bg-bg-hover text-text-secondary font-medium px-6 py-3 rounded-lg transition-colors duration-200">
             Отмена
           </button>
         </div>

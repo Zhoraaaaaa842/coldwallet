@@ -1,9 +1,9 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-8">
     <!-- Header -->
     <div>
-      <h1 class="text-title text-text-primary">Получить ETH</h1>
-      <p class="text-text-secondary mt-1">Генерация QR-кода и сканирование входящих транзакций</p>
+      <h1 class="text-4xl font-black text-white tracking-tight">Получить ETH</h1>
+      <p class="text-text-secondary mt-2">Генерация QR-кода и сканирование входящих транзакций</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -139,9 +139,11 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import QrcodeVue from 'qrcode.vue'
 import { useWalletStore } from '@/stores/wallet'
+import { useNotification } from '@/composables/useNotification'
 
 const router = useRouter()
 const walletStore = useWalletStore()
+const { success, error: showError } = useNotification()
 
 const qrFileInput = ref<HTMLInputElement | null>(null)
 const qrAmount = ref(0)
@@ -167,16 +169,16 @@ function generateQr() {
 }
 
 async function saveQrImage() {
-  // In a real implementation, we would use html2canvas or similar
-  // For now, we'll invoke a Tauri command to save the QR
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('save_qr_image', {
       uri: qrUri.value,
       path: 'qr_code.png',
     })
+    success('QR код сохранен')
   } catch (error) {
     console.error('Failed to save QR image:', error)
+    showError('Не удалось сохранить QR код')
   }
 }
 
@@ -220,16 +222,19 @@ function parseUri() {
   if (!uri) return
 
   // Parse EIP-681 URI
-  const match = uri.match(/^ethereum:([0-9a-fA-F]+)(\?value=(\d+))?$/i)
+  const match = uri.match(/^ethereum:([0-9a-fA-Fx]+)(\?value=(\d+))?$/i)
   if (match) {
     scanResult.value = {
       address: match[1],
       amount: match[3] ? (BigInt(match[3]) / BigInt(1e18)).toString() : undefined,
     }
+    success('URI успешно распознан')
   } else if (uri.startsWith('0x') && uri.length === 42) {
     scanResult.value = { address: uri }
+    success('Адрес распознан')
   } else {
     scanResult.value = { address: 'Неверный формат URI' }
+    showError('Неверный формат URI')
   }
 }
 

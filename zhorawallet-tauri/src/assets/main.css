@@ -3,13 +3,13 @@
 @tailwind utilities;
 
 :root {
-  font-family: 'Segoe UI', 'Inter', Arial, sans-serif;
+  font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
 
   color-scheme: dark;
-  background-color: #0F0F13;
+  background-color: transparent;
   color: #FFFFFF;
 
   font-synthesis: none;
@@ -28,53 +28,55 @@ body {
   margin: 0;
   min-height: 100vh;
   overflow: hidden;
+  background: transparent;
 }
 
 #app {
   width: 100vw;
   height: 100vh;
+  background: #000000;
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #17171C;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2A2A35;
-  border-radius: 4px;
+  background: #1F1F1F;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #6B7280;
+  background: #2A2A2A;
 }
 
 /* Global button styles */
 .btn-primary {
-  @apply bg-accent hover:bg-accent-hover active:bg-accent-dark text-white font-semibold px-6 py-3 rounded-xl transition-colors duration-200;
+  @apply bg-white hover:bg-gray-200 active:bg-gray-300 text-black font-semibold px-6 py-3 rounded-lg transition-all duration-200;
 }
 
 .btn-secondary {
-  @apply bg-bg-tertiary hover:bg-bg-hover text-white font-medium px-4 py-2 rounded-xl transition-colors duration-200;
+  @apply bg-bg-tertiary hover:bg-bg-hover text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200;
 }
 
 /* Card styles */
 .card {
-  @apply bg-bg-secondary rounded-2xl border border-border p-6;
+  @apply bg-bg-card rounded-2xl border border-border p-6 backdrop-blur-sm;
 }
 
 .card-balance {
-  background: linear-gradient(135deg, #1A1033 0%, #1C1040 50%, #0F0F13 100%);
-  @apply rounded-2xl border border-border p-6;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  @apply rounded-2xl border border-border-light p-8 backdrop-blur-sm;
 }
 
 /* Input styles */
 .input-field {
-  @apply w-full bg-bg-tertiary border border-border rounded-xl px-4 py-3 text-white placeholder-text-muted focus:outline-none focus:border-border-focus transition-colors duration-200;
+  @apply w-full bg-bg-tertiary border border-border rounded-lg px-4 py-3 text-white placeholder-text-muted focus:outline-none focus:border-white/30 focus:bg-bg-hover transition-all duration-200;
 }
 
 /* Address/monospace text */

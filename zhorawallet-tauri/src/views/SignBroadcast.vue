@@ -1,9 +1,9 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-8">
     <!-- Header -->
     <div>
-      <h1 class="text-title text-text-primary">Подписать & Отправить</h1>
-      <p class="text-text-secondary mt-1">Управление транзакциями с USB накопителя</p>
+      <h1 class="text-4xl font-black text-white tracking-tight">Подписать & Отправить</h1>
+      <p class="text-text-secondary mt-2">Управление транзакциями с USB накопителя</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -187,10 +187,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useWalletStore } from '@/stores/wallet'
+import { useNotification } from '@/composables/useNotification'
 import type { UsbTransaction } from '@/types'
 import { invoke } from '@tauri-apps/api/core'
 
 const walletStore = useWalletStore()
+const { success, error: showError } = useNotification()
 
 const loading = ref(false)
 const pendingTransactions = ref<UsbTransaction[]>([])
@@ -205,8 +207,10 @@ async function scanPendingTransactions() {
     const txs = await invoke<UsbTransaction[]>('scan_pending_transactions')
     pendingTransactions.value = txs
     walletStore.addBroadcastLog(`Найдено ${txs.length} ожидающих транзакций на USB`)
+    success(`Найдено ${txs.length} транзакций`)
   } catch (error: any) {
     walletStore.addBroadcastLog('Ошибка сканирования pending/: ' + error)
+    showError('Ошибка сканирования USB')
   } finally {
     loading.value = false
   }
@@ -237,22 +241,24 @@ function signTransaction(tx: UsbTransaction) {
 
 async function confirmSign() {
   if (!currentTxToSign) return
-  
+
   showConfirmDialog.value = false
   loading.value = true
-  
+
   try {
     walletStore.addBroadcastLog(`Подписание транзакции #${currentTxToSign.id}...`)
     await invoke('sign_transaction', { tx: currentTxToSign })
     walletStore.addBroadcastLog(`Транзакция #${currentTxToSign.id} успешно подписана`)
-    
+    success('Транзакция подписана')
+
     // Remove from pending list
     pendingTransactions.value = pendingTransactions.value.filter(t => t.id !== currentTxToSign!.id)
-    
+
     // Auto-scan signed
     await scanSignedTransactions()
   } catch (error: any) {
     walletStore.addBroadcastLog('Ошибка подписи: ' + error)
+    showError('Ошибка подписи транзакции')
   } finally {
     loading.value = false
     currentTxToSign = null
@@ -262,18 +268,19 @@ async function confirmSign() {
 async function broadcastTransaction(tx: UsbTransaction) {
   loading.value = true
   walletStore.addBroadcastLog(`Отправка транзакции #${tx.id} в сеть...`)
-  
+
   try {
-    const receipt = await invoke<any>('broadcast_transaction', { 
-      rawTx: tx.data.rawTx 
+    const receipt = await invoke<any>('broadcast_transaction', {
+      rawTx: tx.data.rawTx
     })
-    
+
     walletStore.addBroadcastLog(`Транзакция #${tx.id} успешно отправлена`)
     walletStore.addBroadcastLog(`Hash: ${receipt.hash}`)
-    
+    success('Транзакция отправлена в сеть!')
+
     // Remove from signed list
     signedTransactions.value = signedTransactions.value.filter(t => t.id !== tx.id)
-    
+
     // Refresh balance
     setTimeout(() => {
       walletStore.fetchBalance()
@@ -281,6 +288,7 @@ async function broadcastTransaction(tx: UsbTransaction) {
     }, 3000)
   } catch (error: any) {
     walletStore.addBroadcastLog('Ошибка отправки: ' + error)
+    showError('Ошибка отправки транзакции')
   } finally {
     loading.value = false
   }

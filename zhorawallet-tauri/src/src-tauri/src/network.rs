@@ -92,7 +92,7 @@ pub async fn fetch_eth_price_rub() -> Result<f64, String> {
     Ok(price)
 }
 
-pub async fn get_transaction_history(rpc_url: &str, address: &str) -> Result<Vec<serde_json::Value>, String> {
+pub async fn get_transaction_history(_rpc_url: &str, address: &str) -> Result<Vec<serde_json::Value>, String> {
     // Use Etherscan API for transaction history
     let api_key = ""; // In production, use environment variable
     let etherscan_url = format!(
@@ -132,7 +132,7 @@ pub async fn get_transaction_history(rpc_url: &str, address: &str) -> Result<Vec
             "incoming"
         };
         
-        let value_eth = value.parse::<f64>().unwrap_or(0.0) / 1e18;
+        let _value_eth = value.parse::<f64>().unwrap_or(0.0) / 1e18;
         
         transactions.push(serde_json::json!({
             "hash": tx_hash,

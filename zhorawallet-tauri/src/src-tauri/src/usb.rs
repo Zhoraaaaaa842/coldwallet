@@ -5,8 +5,6 @@ use std::path::Path;
 pub fn detect_usb_drive() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::fs::MetadataExt;
-        
         // Check for removable drives (D:, E:, F:, etc.)
         for drive in 'D'..='Z' {
             let path = format!("{}:\\", drive);

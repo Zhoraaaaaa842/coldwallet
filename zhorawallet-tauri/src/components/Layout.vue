@@ -1,45 +1,49 @@
 <template>
-  <div class="flex h-screen bg-bg-primary">
+  <div class="flex h-screen bg-bg-primary relative">
+    <!-- Animated Background -->
+    <ParticlesBackground />
+
+    <!-- Custom Title Bar -->
+    <TitleBar />
+
     <!-- Sidebar -->
-    <aside class="w-64 bg-bg-secondary border-r border-border flex flex-col">
-      <!-- Logo -->
+    <aside class="w-64 bg-bg-secondary border-r border-border flex flex-col pt-12 relative z-10">
+      <!-- Wallet Info -->
       <div class="p-6 border-b border-border">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-accent rounded-xl flex items-center justify-center">
-            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          </div>
-          <div>
-            <h1 class="text-xl font-bold text-text-primary">ZhoraWallet</h1>
-            <div class="flex items-center gap-2">
-              <div 
-                class="w-2 h-2 rounded-full" 
-                :class="walletStore.usbStatus === 'connected' ? 'bg-success' : 'bg-error'"
-              ></div>
-              <span class="text-xs text-text-muted">
-                {{ walletStore.usbStatus === 'connected' ? 'USB подключен' : 'USB отключен' }}
-              </span>
+        <div class="space-y-3">
+          <div class="flex items-center gap-2">
+            <div class="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+              <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-sm font-bold text-text-primary">Cold Wallet</h2>
+              <p class="text-xs text-text-muted">Ethereum</p>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Navigation -->
-      <nav class="flex-1 p-4 space-y-2">
+      <nav class="flex-1 p-4 space-y-1">
         <button
           v-for="item in navItems"
           :key="item.path"
           @click="navigateTo(item.path)"
           :class="[
-            'w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200',
-            route.path === item.path 
-              ? 'bg-accent text-white' 
-              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+            'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group relative',
+            route.path === item.path
+              ? 'bg-white text-black'
+              : 'text-text-secondary hover:bg-bg-hover hover:text-white'
           ]"
         >
           <component :is="item.icon" class="w-5 h-5" />
-          <span class="font-medium">{{ item.label }}</span>
+          <span class="font-semibold text-sm">{{ item.label }}</span>
+          <div
+            v-if="route.path === item.path"
+            class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-white rounded-r"
+          ></div>
         </button>
       </nav>
 
@@ -53,11 +57,14 @@
     </aside>
 
     <!-- Main Content -->
-    <main class="flex-1 overflow-y-auto">
-      <div class="p-8">
+    <main class="flex-1 overflow-y-auto pt-12 relative z-10">
+      <div class="p-8 max-w-7xl mx-auto">
         <router-view />
       </div>
     </main>
+
+    <!-- Notification Container -->
+    <NotificationContainer />
 
     <!-- Password Dialog -->
     <PasswordDialog
@@ -82,6 +89,9 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { Send, QrCode, Shield, Settings, Home } from 'lucide-vue-next'
+import TitleBar from '@/components/TitleBar.vue'
+import ParticlesBackground from '@/components/ParticlesBackground.vue'
+import NotificationContainer from '@/components/NotificationContainer.vue'
 import PasswordDialog from '@/components/PasswordDialog.vue'
 import WalletInitDialog from '@/components/WalletInitDialog.vue'
 

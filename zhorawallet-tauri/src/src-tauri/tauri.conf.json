@@ -11,11 +11,15 @@
   "app": {
     "windows": [
       {
-        "title": "ZhoraWallet - Ethereum Cold Wallet",
-        "width": 1200,
-        "height": 800,
+        "title": "ZhoraWallet",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1024,
+        "minHeight": 700,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true
       }
     ],
     "security": {

@@ -1,9 +1,9 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-8">
     <!-- Header -->
     <div>
-      <h1 class="text-title text-text-primary">Отправить ETH</h1>
-      <p class="text-text-secondary mt-1">Создание транзакции для отправки</p>
+      <h1 class="text-4xl font-black text-white tracking-tight">Отправить ETH</h1>
+      <p class="text-text-secondary mt-2">Создание транзакции для отправки</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -171,10 +171,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
+import { useNotification } from '@/composables/useNotification'
 import { invoke } from '@tauri-apps/api/core'
 
+const route = useRoute()
 const walletStore = useWalletStore()
+const { success, error: showError } = useNotification()
 
 const recipientAddress = ref('')
 const amount = ref(0)
@@ -246,8 +250,10 @@ async function fetchCurrentGas() {
       maxFeePerGas: gasData.maxFeePerGas,
       maxPriorityFeePerGas: gasData.maxPriorityFeePerGas,
     }
+    success('Настройки газа обновлены')
   } catch (error: any) {
     submitError.value = 'Не удалось получить настройки газа: ' + error
+    showError('Не удалось получить настройки газа')
   } finally {
     loading.value = false
   }
@@ -256,9 +262,10 @@ async function fetchCurrentGas() {
 async function createTransaction() {
   submitError.value = ''
   submitSuccess.value = false
-  
+
   if (!canSubmit.value) {
     submitError.value = 'Заполните все поля корректно'
+    showError('Заполните все поля корректно')
     return
   }
 
@@ -270,25 +277,36 @@ async function createTransaction() {
       gasSettings: walletStore.currentGasSettings,
       nonce: walletStore.state.nonce,
     })
-    
+
     submitSuccess.value = true
-    
+    success('Транзакция создана и сохранена на USB!')
+
     // Clear form
     recipientAddress.value = ''
     amount.value = 0
-    
+
     // Refresh balance after 2 seconds
     setTimeout(() => {
       walletStore.fetchBalance()
     }, 2000)
   } catch (error: any) {
     submitError.value = 'Ошибка создания транзакции: ' + error
+    showError('Ошибка создания транзакции')
   } finally {
     loading.value = false
   }
 }
 
 onMounted(() => {
+  // Pre-fill from query params (from QR scan)
+  if (route.query.to) {
+    recipientAddress.value = route.query.to as string
+    validateAddress()
+  }
+  if (route.query.amount) {
+    amount.value = parseFloat(route.query.amount as string)
+  }
+
   fetchCurrentGas()
 })
 </script>
