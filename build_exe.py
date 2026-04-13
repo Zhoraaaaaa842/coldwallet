@@ -13,6 +13,7 @@ import subprocess
 import sys
 import os
 import time
+import shutil
 
 R   = "\033[0m"
 B   = "\033[1m"
@@ -36,17 +37,18 @@ BANNER = f"""
 {DIM}           ─────────────────────────────────────────────{R}
 """
 
-# ─── Принудительный выбор Python с нужными зависимостями ───────────────────
-PREFERRED_PYTHONS = [
-    r"C:\Users\yarch\AppData\Local\Programs\Python\Python312\python.exe",
-    r"C:\Users\yarch\AppData\Local\Programs\Python\Python311\python.exe",
-    r"C:\Users\yarch\AppData\Local\Programs\Python\Python310\python.exe",
-]
 
 def find_python_with_deps():
-    """Возвращает путь к Python, у которого установлены PIL и qrcode."""
-    candidates = PREFERRED_PYTHONS[:]
-    # Добавляем текущий Python как запасной вариант
+    """Автоматически ищет Python с установленными PIL и qrcode через PATH и sys.executable."""
+    candidates = []
+
+    # Поиск через PATH
+    for name in ["python", "python3", "py"]:
+        found = shutil.which(name)
+        if found and found not in candidates:
+            candidates.append(found)
+
+    # Текущий Python как запасной вариант
     if sys.executable not in candidates:
         candidates.append(sys.executable)
 
