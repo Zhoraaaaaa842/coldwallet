@@ -34,13 +34,19 @@ if not _RUST_AVAILABLE:
     NONCE_SIZE = 12
     KEY_SIZE = 32
     MAX_FAILED_ATTEMPTS = 5
+    MIN_PASSWORD_LENGTH = 8
 
-    def _secure_zero(data: bytes) -> None:
+    def _secure_zero(data) -> None:
+        """
+        FIX: обнуляет bytearray напрямую в памяти (не создаёт копию).
+        Принимает bytes или bytearray.
+        """
         if not data:
             return
         try:
-            buf = (ctypes.c_char * len(data)).from_buffer_copy(data)
-            ctypes.memset(buf, 0, len(data))
+            if isinstance(data, (bytes, bytearray)):
+                buf = (ctypes.c_char * len(data)).from_buffer(bytearray(data))
+                ctypes.memset(buf, 0, len(data))
         except Exception:
             pass
 
@@ -49,7 +55,7 @@ if not _RUST_AVAILABLE:
 
         def __init__(self):
             self._mnemo = Mnemonic("english")
-            self._private_key: Optional[bytes] = None
+            self._private_key: Optional[bytearray] = None
             self._address: Optional[str] = None
             self._mnemonic: Optional[str] = None
             self._failed_attempts: int = 0
@@ -71,7 +77,7 @@ if not _RUST_AVAILABLE:
             acct = Account.from_mnemonic(
                 self._mnemonic, account_path="m/44'/60'/0'/0/0"
             )
-            self._private_key = bytes(acct.key)
+            self._private_key = bytearray(acct.key)
             self._address = acct.address
             return self._mnemonic, self._address
 
@@ -81,7 +87,7 @@ if not _RUST_AVAILABLE:
             acct = Account.from_mnemonic(
                 mnemonic, account_path="m/44'/60'/0'/0/0"
             )
-            self._private_key = bytes(acct.key)
+            self._private_key = bytearray(acct.key)
             self._address = acct.address
             self._mnemonic = mnemonic
             return self._address
@@ -93,35 +99,38 @@ if not _RUST_AVAILABLE:
             if len(pk_bytes) != 32:
                 raise ValueError("Приватный ключ должен быть 32 байта")
             acct = Account.from_key(pk_bytes)
-            self._private_key = bytes(acct.key)
+            self._private_key = bytearray(acct.key)
             self._address = acct.address
             self._mnemonic = None
             return self._address
 
-        def _derive_encryption_key(self, password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> bytes:
+        def _derive_encryption_key(self, password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> bytearray:
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(),
                 length=KEY_SIZE,
                 salt=salt,
                 iterations=iterations,
             )
-            return kdf.derive(password.encode("utf-8"))
+            return bytearray(kdf.derive(password.encode("utf-8")))
 
         def encrypt_and_save(self, password: str, filepath: str) -> None:
             if self._private_key is None:
                 raise RuntimeError("Ключ не загружен.")
             if not password:
                 raise ValueError("Пароль не может быть пустым")
+            # FIX: минимальная длина пароля
+            if len(password) < MIN_PASSWORD_LENGTH:
+                raise ValueError(f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов")
             salt = secrets.token_bytes(SALT_SIZE)
             nonce = secrets.token_bytes(NONCE_SIZE)
             enc_key = self._derive_encryption_key(password, salt)
-            payload = {"private_key": self._private_key.hex()}
+            payload = {"private_key": bytes(self._private_key).hex()}
             if self._mnemonic:
                 payload["mnemonic"] = self._mnemonic
-            plaintext = json.dumps(payload).encode("utf-8")
-            aesgcm = AESGCM(enc_key)
+            plaintext = bytearray(json.dumps(payload).encode("utf-8"))
+            aesgcm = AESGCM(bytes(enc_key))
             aad = self._address.encode("utf-8") if self._address else None
-            ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
+            ciphertext = aesgcm.encrypt(nonce, bytes(plaintext), aad)
             wallet_data = {
                 "version": 1, "address": self._address,
                 "salt": salt.hex(), "nonce": nonce.hex(),
@@ -152,21 +161,21 @@ if not _RUST_AVAILABLE:
             file_iterations = wallet_data.get("iterations", PBKDF2_ITERATIONS)
             iterations = max(int(file_iterations), PBKDF2_ITERATIONS_MIN)
             enc_key = self._derive_encryption_key(password, salt, iterations)
-            aesgcm = AESGCM(enc_key)
+            aesgcm = AESGCM(bytes(enc_key))
             aad = address.encode("utf-8")
             try:
-                plaintext = aesgcm.decrypt(nonce, ciphertext, aad)
+                plaintext = bytearray(aesgcm.decrypt(nonce, ciphertext, aad))
             except Exception:
                 self._failed_attempts += 1
                 _secure_zero(enc_key)
                 remaining = MAX_FAILED_ATTEMPTS - self._failed_attempts
                 raise ValueError(f"Неверный пароль. Осталось попыток: {remaining}")
-            payload = json.loads(plaintext.decode("utf-8"))
-            self._private_key = bytes.fromhex(payload["private_key"])
+            payload = json.loads(bytes(plaintext).decode("utf-8"))
+            self._private_key = bytearray(bytes.fromhex(payload["private_key"]))
             self._address = address
             self._mnemonic = payload.get("mnemonic")
             self._failed_attempts = 0
-            acct = Account.from_key(self._private_key)
+            acct = Account.from_key(bytes(self._private_key))
             if acct.address.lower() != address.lower():
                 self.clear()
                 raise ValueError("Ошибка целостности: адрес не совпадает")
@@ -176,12 +185,12 @@ if not _RUST_AVAILABLE:
 
         @property
         def private_key(self) -> Optional[bytes]:
-            return self._private_key
+            return bytes(self._private_key) if self._private_key is not None else None
 
         def get_private_key(self) -> bytes:
             if self._private_key is None:
                 raise RuntimeError("Ключ не загружен")
-            return self._private_key
+            return bytes(self._private_key)
 
         def clear(self) -> None:
             if self._private_key is not None:

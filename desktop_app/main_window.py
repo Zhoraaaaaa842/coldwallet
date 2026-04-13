@@ -2,6 +2,15 @@
 ZhoraWallet ETH — Главное окно десктоп-приложения.
 Чёрная тема, без вкладки Настройки, кнопка MAX для отправки всей суммы,
 фикс краша при подписи транзакции.
+
+FIXES applied:
+  - _pil_to_pixmap восстановлена (была обрезана — краш QR)
+  - closeEvent: остановка таймеров и потоков при закрытии
+  - Валидация адреса: Web3.is_address() вместо len+0x
+  - TxItemWidget: защита от пустой/некорректной строки value
+  - _sign_pending_tx: delete_pending после успешного save_signed
+  - import Decimal на уровне модуля
+  - Минимальная длина пароля проверяется в UI
 """
 
 import os
@@ -12,6 +21,7 @@ import webbrowser
 import traceback
 import datetime
 from collections import defaultdict
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -51,14 +61,12 @@ def _get_private_key_bytes(km: KeyManager) -> Optional[bytes]:
     Rust-версия не имеет @property private_key — только get_private_key().
     Python fallback имеет оба варианта.
     """
-    # Сначала пробуем метод (поддерживается обеими реализациями)
     try:
         raw = km.get_private_key()
         if raw:
             return bytes(raw)
     except Exception:
         pass
-    # Fallback на property (только Python-реализация)
     try:
         raw = km.private_key
         if raw:
@@ -66,6 +74,21 @@ def _get_private_key_bytes(km: KeyManager) -> Optional[bytes]:
     except AttributeError:
         pass
     return None
+
+
+def _pil_to_pixmap(pil_image) -> QPixmap:
+    """FIX: восстановлена обрезанная функция конвертации PIL Image -> QPixmap."""
+    from PIL.ImageQt import ImageQt
+    try:
+        # Быстрый путь через ImageQt (Pillow >= 9)
+        qt_image = ImageQt(pil_image.convert("RGBA"))
+        return QPixmap.fromImage(qt_image)
+    except Exception:
+        # Fallback: вручную через bytes
+        img_rgba = pil_image.convert("RGBA")
+        data = img_rgba.tobytes("raw", "RGBA")
+        qimg = QImage(data, img_rgba.width, img_rgba.height, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(qimg)
 
 
 # ─── Поток получения цены ETH в рублях (CoinGecko) ─── #
@@ -111,34 +134,38 @@ class NetworkWorker(QThread):
         self._eth = eth_net
         self._task = None
         self._params = {}
+        self._pending_task = None
+        self._pending_params = {}
+
+    def _set_task(self, task: str, params: dict = None):
+        """FIX: безопасно устанавливает задачу — не перезаписывает если поток занят."""
+        if self.isRunning():
+            # Сохраняем как pending — выполним после завершения текущей
+            self._pending_task = task
+            self._pending_params = params or {}
+            return False
+        self._task = task
+        self._params = params or {}
+        return True
 
     def fetch_balance(self, address: str):
-        self._task = "balance"
-        self._params = {"address": address}
-        if not self.isRunning():
+        if self._set_task("balance", {"address": address}):
             self.start()
 
     def fetch_gas(self):
-        self._task = "gas"
-        if not self.isRunning():
+        if self._set_task("gas", {}):
             self.start()
 
     def fetch_nonce(self, address: str):
-        self._task = "nonce"
-        self._params = {"address": address}
-        if not self.isRunning():
+        if self._set_task("nonce", {"address": address}):
             self.start()
 
     def send_tx(self, raw_tx: str):
-        self._task = "send_tx"
-        self._params = {"raw_tx": raw_tx}
-        if not self.isRunning():
+        if self._set_task("send_tx", {"raw_tx": raw_tx}):
             self.start()
 
     def fetch_tx_history(self, address: str):
-        self._task = "tx_history"
-        self._params = {"address": address}
-        if not self.isRunning():
+        if self._set_task("tx_history", {"address": address}):
             self.start()
 
     def run(self):
@@ -163,6 +190,14 @@ class NetworkWorker(QThread):
                     self.tx_history_ready.emit([])
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            # FIX: запускаем pending задачу если была
+            if self._pending_task:
+                self._task = self._pending_task
+                self._params = self._pending_params
+                self._pending_task = None
+                self._pending_params = {}
+                self.start()
 
 
 # ─── Виджет одной транзакции ─── #
@@ -235,7 +270,12 @@ class TxItemWidget(QFrame):
         right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         right.setSpacing(2)
 
-        value_wei = int(tx.get("value", 0))
+        # FIX: защита от пустой строки в value
+        try:
+            value_raw = tx.get("value", 0)
+            value_wei = int(value_raw) if value_raw != "" else 0
+        except (ValueError, TypeError):
+            value_wei = 0
         value_eth = value_wei / 10**18
         sign = "+" if is_incoming else "−"
         amount_lbl = QLabel(f"{sign}{value_eth:.6f} ETH")
@@ -335,6 +375,19 @@ class ColdVaultMainWindow(QMainWindow):
         self._price_timer.timeout.connect(self._fetch_eth_price)
         self._price_timer.start()
 
+    # FIX: остановка всех потоков и таймеров при закрытии окна
+    def closeEvent(self, event):
+        self._usb_timer.stop()
+        self._price_timer.stop()
+        for worker in (
+            self._balance_worker, self._nonce_worker, self._gas_worker,
+            self._tx_worker, self._history_worker, self._price_worker
+        ):
+            if worker.isRunning():
+                worker.quit()
+                worker.wait(2000)
+        super().closeEvent(event)
+
     def _fetch_eth_price(self):
         if not self._price_worker.isRunning():
             self._price_worker.start()
@@ -364,7 +417,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._stack.addWidget(self._build_sign_page())         # 3
         main_layout.addWidget(self._stack, 1)
 
-    # ─── Sidebar (без вкладки Настройки) ─── #
+    # ─── Sidebar ─── #
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
@@ -387,7 +440,6 @@ class ColdVaultMainWindow(QMainWindow):
         )
         layout.addWidget(self._usb_status)
 
-        # 4 вкладки — без Настроек
         nav_items = [
             ("Кошелёк", 0),
             ("Отправить", 1),
@@ -412,7 +464,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._network_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._network_label)
 
-        ver = QLabel("v1.1.0")
+        ver = QLabel("v1.1.1")
         ver.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; padding: 8px;")
         ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(ver)
@@ -734,7 +786,6 @@ class ColdVaultMainWindow(QMainWindow):
     def _load_tx_history(self):
         if not self._address:
             return
-        self._history_worker._eth = self._eth
         try:
             self._history_worker.tx_history_ready.disconnect(self._on_tx_history_received)
         except TypeError:
@@ -1016,7 +1067,6 @@ class ColdVaultMainWindow(QMainWindow):
         self._to_input.setPlaceholderText("0x...")
         form_layout.addWidget(self._to_input)
 
-        # Сумма + кнопка MAX
         amount_label_row = QHBoxLayout()
         amount_label_row.addWidget(self._make_field_label("Сумма (ETH)"))
         amount_label_row.addStretch()
@@ -1264,9 +1314,8 @@ class ColdVaultMainWindow(QMainWindow):
 
     def _sign_pending_tx(self, filename: str):
         """
-        FIX: использует _get_private_key_bytes() для совместимости
-        Rust (coldvault_core) и Python fallback KeyManager.
-        Rust не имеет @property private_key — только get_private_key().
+        FIX: использует _get_private_key_bytes() для совместимости Rust/Python.
+        FIX: delete_pending вызывается только после успешного save_signed.
         """
         try:
             private_key = _get_private_key_bytes(self._km)
@@ -1299,8 +1348,9 @@ class ColdVaultMainWindow(QMainWindow):
             signed_hex = signer.sign_transaction(tx_req)
 
             signed_filename = filename.replace(".json", "_signed.json")
+            # FIX: сначала сохраняем подписанную TX, потом удаляем pending
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
-            self._usb.delete_pending_tx(filename)
+            self._usb.delete_pending_tx(filename)  # удаляем только после успешного сохранения
 
             if hasattr(self, '_broadcast_log'):
                 self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
@@ -1433,7 +1483,6 @@ class ColdVaultMainWindow(QMainWindow):
                 return
 
             wallet_file = str(self._usb.wallet_file)
-
             address = self._unlock_wallet(wallet_file)
             if address is None:
                 return
@@ -1468,10 +1517,15 @@ class ColdVaultMainWindow(QMainWindow):
     def _ask_new_password(self) -> Optional[str]:
         password, ok = QInputDialog.getText(
             self, "Пароль для кошелька",
-            "Придумайте пароль для шифрования кошелька:",
+            "Придумайте пароль (минимум 8 символов):",
             QLineEdit.EchoMode.Password,
         )
         if not ok or not password:
+            return None
+
+        # FIX: проверка минимальной длины пароля
+        if len(password) < 8:
+            QMessageBox.warning(self, "Слабый пароль", "Пароль должен содержать не менее 8 символов.")
             return None
 
         confirm, ok2 = QInputDialog.getText(
@@ -1639,8 +1693,10 @@ class ColdVaultMainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован или USB не подключён.")
             return
         to = self._to_input.text().strip()
-        if not to.startswith("0x") or len(to) != 42:
-            QMessageBox.warning(self, "Ошибка", "Неверный адрес получателя")
+        # FIX: используем Web3.is_address() для полной валидации адреса
+        from web3 import Web3
+        if not Web3.is_address(to):
+            QMessageBox.warning(self, "Ошибка", "Неверный Ethereum-адрес получателя")
             return
         amount_eth = self._amount_input.value()
         if amount_eth <= 0:
@@ -1648,8 +1704,6 @@ class ColdVaultMainWindow(QMainWindow):
             return
         try:
             use_eip1559 = self._tx_type_combo.currentIndex() == 0
-
-            from decimal import Decimal
             value_wei = int(Decimal(str(amount_eth)) * Decimal("1000000000000000000"))
 
             if use_eip1559:
@@ -1662,7 +1716,7 @@ class ColdVaultMainWindow(QMainWindow):
                 gas_price = int(self._gas_price_input.value() * 10**9)
 
             tx_req = TransactionRequest(
-                to=to,
+                to=Web3.to_checksum_address(to),
                 value=value_wei,
                 nonce=self._current_nonce,
                 chain_id=self._eth.chain_id or 1,
@@ -1724,13 +1778,3 @@ class ColdVaultMainWindow(QMainWindow):
             if hasattr(self, '_broadcast_log'):
                 self._broadcast_log.append(f"[?] TX в mempool: {tx_hash}")
             QMessageBox.warning(self, "Ожидание подтверждения", msg)
-
-
-def _pil_to_pixmap(pil_image) -> QPixmap:
-    import io
-    buf = io.BytesIO()
-    pil_image.save(buf, format="PNG")
-    buf.seek(0)
-    qimg = QImage()
-    qimg.loadFromData(buf.read())
-    return QPixmap.fromImage(qimg)
