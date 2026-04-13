@@ -19,12 +19,15 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "transparent": true
+        "transparent": true,
+        "label": "main"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
-    }
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'",
+      "capabilities": ["default"]
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
