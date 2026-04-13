@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
+    Aes256Gcm,
 };
 use coins_bip32::{
     path::DerivationPath,
@@ -27,6 +27,12 @@ use tiny_keccak::{Hasher, Keccak};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::VaultError;
+
+// Полный тип AES-256-GCM nonce: GenericArray<u8, U12>
+type AesNonce = aes_gcm::aead::generic_array::GenericArray<
+    u8,
+    aes_gcm::aead::generic_array::typenum::U12,
+>;
 
 const PBKDF2_ITERATIONS: u32 = 600_000;
 const PBKDF2_ITERATIONS_MIN: u32 = 600_000;
@@ -60,8 +66,8 @@ struct WalletData {
     mnemonic: Option<Zeroizing<String>>,
 }
 
-/// Преобразует &[u8] (12 байт) в Nonce без deprecated from_slice
-fn bytes_to_nonce(bytes: &[u8]) -> Nonce {
+/// Преобразует &[u8] (12 байт) в AesNonce без deprecated from_slice
+fn bytes_to_nonce(bytes: &[u8]) -> AesNonce {
     let arr: [u8; 12] = bytes.try_into().expect("nonce должен быть 12 байт");
     arr.into()
 }
@@ -69,7 +75,6 @@ fn bytes_to_nonce(bytes: &[u8]) -> Nonce {
 pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
     let signing_key = SigningKey::from_slice(private_key_bytes)
         .map_err(|e| VaultError::Crypto(e.to_string()))?;
-    // verifying_key() возвращает VerifyingKey (не ссылку), From<&VerifyingKey> реализован
     let public_key = PublicKey::from(signing_key.verifying_key());
     let encoded = public_key.to_encoded_point(false);
     let pub_bytes = &encoded.as_bytes()[1..];
@@ -387,7 +392,6 @@ fn derive_eth_key_from_seed(seed: &[u8]) -> PyResult<Vec<u8>> {
         .map_err(|e| VaultError::Crypto(format!("Путь: {e}")))?;
     let child = master.derive_path(&path)
         .map_err(|e| VaultError::Crypto(format!("HD: {e}")))?;
-    // coins-bip32 0.13: XPriv реализует AsRef<SigningKey>
     let signing_key: &k256::ecdsa::SigningKey = child.as_ref();
     Ok(signing_key.to_bytes().to_vec())
 }
