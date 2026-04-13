@@ -322,6 +322,11 @@ class ColdVaultMainWindow(QMainWindow):
         self._connect_signals()
 
         QTimer.singleShot(500, self._detect_usb)
+        self._usb_timer = QTimer(self)
+        self._usb_timer.setInterval(3_000)          # опрос USB каждые 3 сек
+        self._usb_timer.timeout.connect(self._detect_usb)
+        self._usb_timer.start()
+
         QTimer.singleShot(1000, self._fetch_eth_price)
         self._price_timer = QTimer(self)
         self._price_timer.setInterval(180_000)
@@ -1385,13 +1390,16 @@ class ColdVaultMainWindow(QMainWindow):
             btn.setChecked(i == idx)
 
     def _detect_usb(self):
+        """Периодический опрос USB-накопителей (вызывается таймером каждые 3 с)."""
         try:
             drives = USBManager.detect_usb_drives()
             if drives:
-                self._usb_connected = True
                 drive_info = drives[0]
                 drive_path = drive_info["path"]
                 drive_label = drive_info.get("label", drive_path)
+
+                was_connected = self._usb_connected
+                self._usb_connected = True
 
                 self._usb_status.setText(f"● USB: {drive_label}")
                 self._usb_status.setStyleSheet(
@@ -1400,13 +1408,23 @@ class ColdVaultMainWindow(QMainWindow):
                 if self._usb_display:
                     self._usb_display.setText("Подкл.")
 
-                self._load_wallet_from_usb(drive_path)
+                # Загружаем кошелёк только при первом обнаружении флешки
+                if not was_connected:
+                    self._load_wallet_from_usb(drive_path)
             else:
+                was_connected = self._usb_connected
                 self._usb_connected = False
                 self._usb_status.setText("● USB отключён")
                 self._usb_status.setStyleSheet(
                     f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;"
                 )
+                if self._usb_display:
+                    self._usb_display.setText("Не подкл.")
+
+                # Сброс состояния кошелька при извлечении флешки
+                if was_connected:
+                    self._address = None
+                    self._address_label.setText("Подключите USB для начала работы")
         except Exception:
             pass
 
