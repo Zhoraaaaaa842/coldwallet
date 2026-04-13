@@ -1433,6 +1433,7 @@ class ColdVaultMainWindow(QMainWindow):
             self._usb.set_usb_path(drive_path)
 
             if not self._usb.is_initialized:
+                self._handle_uninitialized_usb()
                 return
 
             wallet_file = str(self._usb.wallet_file)
@@ -1451,6 +1452,124 @@ class ColdVaultMainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка загрузки кошелька", str(e))
+
+    def _handle_uninitialized_usb(self):
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setWindowTitle("USB не инициализирован")
+        msg.setText(
+            "На USB-накопителе не найден кошелёк.\n"
+            "Выберите действие:"
+        )
+        btn_create = msg.addButton(
+            "Создать новый кошелёк", QMessageBox.ButtonRole.AcceptRole
+        )
+        btn_import = msg.addButton(
+            "Импортировать из мнемоники", QMessageBox.ButtonRole.ActionRole
+        )
+        msg.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_create:
+            self._create_new_wallet_on_usb()
+        elif clicked == btn_import:
+            self._import_wallet_on_usb()
+
+    def _ask_new_password(self) -> Optional[str]:
+        password, ok = QInputDialog.getText(
+            self,
+            "Пароль для кошелька",
+            "Придумайте пароль для шифрования кошелька:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not password:
+            return None
+
+        confirm, ok2 = QInputDialog.getText(
+            self,
+            "Подтверждение пароля",
+            "Повторите пароль:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok2 or not confirm:
+            return None
+
+        if password != confirm:
+            QMessageBox.warning(
+                self, "Ошибка", "Пароли не совпадают. Попробуйте снова."
+            )
+            return None
+
+        return password
+
+    def _finish_wallet_setup(self, address: str):
+        self._address = address
+        short = address[:10] + "…" + address[-8:]
+        self._address_label.setText(short)
+        self._btn_refresh.setEnabled(True)
+        self._btn_create_tx.setEnabled(True)
+        self._refresh_balance()
+        self._load_tx_history()
+
+    def _create_new_wallet_on_usb(self):
+        try:
+            password = self._ask_new_password()
+            if password is None:
+                return
+
+            mnemonic, address = self._km.generate_wallet()
+
+            self._usb.initialize_usb()
+            wallet_file = str(self._usb.wallet_file)
+            self._km.encrypt_and_save(password, wallet_file)
+
+            QMessageBox.information(
+                self,
+                "Мнемоническая фраза",
+                "ВАЖНО! Запишите мнемоническую фразу и храните её\n"
+                "в надёжном месте. Она нужна для восстановления кошелька.\n"
+                "Никому не сообщайте её!\n\n"
+                f"{mnemonic}"
+            )
+
+            self._finish_wallet_setup(address)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка создания кошелька", str(e))
+
+    def _import_wallet_on_usb(self):
+        try:
+            mnemonic, ok = QInputDialog.getText(
+                self,
+                "Импорт кошелька",
+                "Введите мнемоническую фразу (12 или 24 слова):",
+            )
+            if not ok or not mnemonic.strip():
+                return
+
+            mnemonic = mnemonic.strip()
+
+            password = self._ask_new_password()
+            if password is None:
+                return
+
+            address = self._km.import_from_mnemonic(mnemonic)
+
+            self._usb.initialize_usb()
+            wallet_file = str(self._usb.wallet_file)
+            self._km.encrypt_and_save(password, wallet_file)
+
+            QMessageBox.information(
+                self,
+                "Кошелёк импортирован",
+                f"Кошелёк успешно импортирован.\nАдрес: {address}"
+            )
+
+            self._finish_wallet_setup(address)
+        except ValueError as e:
+            QMessageBox.warning(self, "Ошибка импорта", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка импорта кошелька", str(e))
 
     def _unlock_wallet(self, wallet_file: str, max_attempts: int = 3) -> Optional[str]:
         for attempt in range(1, max_attempts + 1):
