@@ -1,16 +1,5 @@
 """
 ColdVault ETH - Master Build Script.
-
-Порядок сборки:
-  1. Rust-ядро  → maturin build --release  → coldvault_core-*.whl
-  2. Установка .whl в текущий venv
-  3. ZhoraWallet.exe   → PyInstaller (windowed)
-  4. SignOffline.exe   → PyInstaller (console)
-  5. ZhoraUSB.exe      → PyInstaller (windowed)
-  6. ColdVault_Setup/  → итоговый пакет
-
-Использование:
-    python build_all.py [--desktop-only] [--signer-only] [--installer-only] [--no-clean] [--skip-rust]
 """
 
 import os
@@ -18,6 +7,8 @@ import sys
 import shutil
 import argparse
 import subprocess
+import time
+import threading
 from pathlib import Path
 
 
@@ -30,160 +21,345 @@ RUST_TARGET  = RUST_DIR / "target" / "wheels"
 
 
 # ---------------------------------------------------------------------------
-# Шаг 1: Сборка Rust-ядра
+# ANSI colors
+# ---------------------------------------------------------------------------
+class C:
+    RESET  = "\033[0m"
+    BOLD   = "\033[1m"
+    DIM    = "\033[2m"
+    CYAN   = "\033[96m"
+    GREEN  = "\033[92m"
+    YELLOW = "\033[93m"
+    RED    = "\033[91m"
+    BLUE   = "\033[94m"
+    MAGENTA= "\033[95m"
+    WHITE  = "\033[97m"
+    GRAY   = "\033[90m"
+
+
+def enable_ansi():
+    """Enable ANSI on Windows."""
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+
+
+# ---------------------------------------------------------------------------
+# Banner
+# ---------------------------------------------------------------------------
+BANNER = r"""
+
+  ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░ ░▒▓███████▓▒░░▒▓██████▓▒░  
+      ░▒▓█▓▒░   ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+      ░▒▓█▓▒░   ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+      ░▒▓█▓▒░   ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓████████▓▒░ 
+      ░▒▓█▓▒░   ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+      ░▒▓█▓▒░   ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+      ░▒▓█▓▒░   ░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+"""
+
+SUBTITLE = "  ColdVault ETH  ·  Build System v3  ·  by Zhora"
+DIVIDER  = "  " + "─" * 66
+
+
+def print_banner():
+    print(C.CYAN + C.BOLD + BANNER + C.RESET)
+    print(C.WHITE + C.BOLD + SUBTITLE + C.RESET)
+    print(C.GRAY + DIVIDER + C.RESET)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Progress bar
+# ---------------------------------------------------------------------------
+BAR_WIDTH = 40
+
+def render_bar(label: str, step: int, total: int, status: str = ""):
+    filled = int(BAR_WIDTH * step / total)
+    bar    = "█" * filled + "░" * (BAR_WIDTH - filled)
+    pct    = int(100 * step / total)
+    status_str = f"  {C.GRAY}{status}{C.RESET}" if status else ""
+    line = (
+        f"  {C.CYAN}{label:<26}{C.RESET} "
+        f"{C.BLUE}[{C.CYAN}{bar}{C.BLUE}]{C.RESET} "
+        f"{C.WHITE}{pct:>3}%{C.RESET}"
+        f"{status_str}"
+    )
+    print(f"\r{line}", end="", flush=True)
+
+
+def done_bar(label: str, msg: str = "Done"):
+    bar = "█" * BAR_WIDTH
+    line = (
+        f"  {C.GREEN}{label:<26}{C.RESET} "
+        f"{C.GREEN}[{bar}]{C.RESET} "
+        f"{C.GREEN}100%  ✓ {msg}{C.RESET}"
+    )
+    print(f"\r{line}")
+
+
+def fail_bar(label: str, msg: str = "FAILED"):
+    bar = "▓" * BAR_WIDTH
+    line = (
+        f"  {C.RED}{label:<26}{C.RESET} "
+        f"{C.RED}[{bar}]{C.RESET} "
+        f"{C.RED} ERR  ✗ {msg}{C.RESET}"
+    )
+    print(f"\r{line}")
+
+
+def step_header(index: int, total: int, title: str):
+    print()
+    print(
+        f"  {C.BOLD}{C.YELLOW}[{index}/{total}]{C.RESET} "
+        f"{C.WHITE}{C.BOLD}{title}{C.RESET}"
+    )
+    print(C.GRAY + "  " + "·" * 66 + C.RESET)
+
+
+def ok(msg: str):
+    print(f"  {C.GREEN}✓{C.RESET}  {msg}")
+
+
+def warn(msg: str):
+    print(f"  {C.YELLOW}⚠{C.RESET}  {msg}")
+
+
+def err(msg: str):
+    print(f"  {C.RED}✗{C.RESET}  {C.RED}{msg}{C.RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Spinner для долгих операций
+# ---------------------------------------------------------------------------
+class Spinner:
+    FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+
+    def __init__(self, label: str):
+        self.label   = label
+        self._stop   = threading.Event()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        i = 0
+        while not self._stop.is_set():
+            f = self.FRAMES[i % len(self.FRAMES)]
+            print(f"\r  {C.CYAN}{f}{C.RESET}  {self.label} ...", end="", flush=True)
+            time.sleep(0.08)
+            i += 1
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._stop.set()
+        self._thread.join()
+        print("\r" + " " * 70 + "\r", end="")
+
+
+# ---------------------------------------------------------------------------
+# Шаг 1: Rust-ядро
 # ---------------------------------------------------------------------------
 
 def check_rust_tools() -> bool:
-    """Returns False if maturin or cargo not found."""
     missing = []
     for tool in ("maturin", "cargo"):
         if shutil.which(tool) is None:
             missing.append(tool)
     if missing:
-        print(f"  [!] Не найдены: {', '.join(missing)}")
-        print("      Установка:")
+        err(f"Не найдены: {', '.join(missing)}")
         if "cargo" in missing:
-            print("        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
+            warn("  Установи Rust: https://rustup.rs")
         if "maturin" in missing:
-            print("        pip install maturin")
+            warn("  pip install maturin")
         return False
     return True
 
 
 def build_rust_core() -> Path:
-    """
-    Собирает Rust-ядро через maturin build --release.
-    Возвращает путь к .whl файлу.
-    """
-    print("\n  [*] Сборка Rust-ядра (maturin build --release)...")
+    LABEL = "Rust core (maturin)"
+    steps = 8
 
+    render_bar(LABEL, 0, steps, "проверка инструментов")
     if not check_rust_tools():
+        fail_bar(LABEL, "maturin/cargo not found")
         sys.exit(1)
+    render_bar(LABEL, 1, steps, "очистка старых wheels")
 
-    # Старая .whl удаляем, чтобы не установить устаревшую версию
     if RUST_TARGET.exists():
         shutil.rmtree(RUST_TARGET)
+    time.sleep(0.1)
+    render_bar(LABEL, 2, steps, "запуск cargo build --release")
 
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "maturin",
-            "build", "--release",
-            "--out", str(RUST_TARGET),
-        ],
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "maturin", "build", "--release",
+         "--out", str(RUST_TARGET)],
         cwd=str(RUST_DIR),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
-    if result.returncode != 0:
-        print("  [!] maturin завершился с ошибкой:")
-        for line in result.stderr.strip().splitlines()[-20:]:
-            print(f"      {line}")
+    cargo_steps = [
+        "Compiling", "Finished", "Building", "Linking",
+        "Archiving", "Running", "Checking",
+    ]
+    compiled = set()
+    progress = 2
+    lines_buf = []
+
+    for line in proc.stdout:
+        lines_buf.append(line)
+        stripped = line.strip()
+        for kw in cargo_steps:
+            if kw in stripped and stripped not in compiled:
+                compiled.add(stripped)
+                progress = min(progress + 1, steps - 1)
+                short = stripped[:40].replace("Compiling ", "").replace("Finished ", "")
+                render_bar(LABEL, progress, steps, short)
+                break
+
+    proc.wait()
+
+    if proc.returncode != 0:
+        fail_bar(LABEL)
+        print()
+        err("maturin завершился с ошибкой:")
+        for l in lines_buf[-25:]:
+            print(f"    {C.RED}{l.rstrip()}{C.RESET}")
         sys.exit(1)
 
     wheels = list(RUST_TARGET.glob("coldvault_core-*.whl"))
     if not wheels:
-        print("  [!] .whl файл не найден после сборки")
+        fail_bar(LABEL, ".whl не найден")
         sys.exit(1)
 
-    whl = wheels[0]
-    print(f"  [OK] Собран: {whl.name}")
-    return whl
+    done_bar(LABEL, wheels[0].name)
+    return wheels[0]
 
 
 def install_wheel(whl: Path):
-    """pip install --force-reinstall <whl> в текущий venv."""
-    print(f"  [*] Установка {whl.name}...")
+    LABEL = "pip install wheel"
+    render_bar(LABEL, 0, 3, "подготовка")
+    time.sleep(0.1)
+    render_bar(LABEL, 1, 3, whl.name)
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", str(whl), "--force-reinstall", "-q"],
-        capture_output=True,
-        text=True,
+        [sys.executable, "-m", "pip", "install", str(whl),
+         "--force-reinstall", "-q"],
+        capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print("  [!] pip install не удался:")
-        print(result.stderr[-500:])
+        fail_bar(LABEL)
+        err(result.stderr[-400:])
         sys.exit(1)
-    print("  [OK] coldvault_core установлен в venv")
+    render_bar(LABEL, 3, 3)
+    done_bar(LABEL, "coldvault_core установлен")
 
 
 def verify_rust_import():
-    """Quick smoke-test: проверяем что модуль импортируется."""
+    LABEL = "Smoke-test import"
+    render_bar(LABEL, 0, 2, "from coldvault_core import KeyManager")
     result = subprocess.run(
         [sys.executable, "-c",
          "from coldvault_core import KeyManager; km=KeyManager(); print('OK')"],
         capture_output=True, text=True,
     )
     if result.returncode != 0 or "OK" not in result.stdout:
-        print("  [!] Импорт coldvault_core не удался:")
-        print(result.stderr[-300:])
+        fail_bar(LABEL)
+        err(result.stderr[-300:])
         sys.exit(1)
-    print("  [OK] coldvault_core импорт прошёл")
+    done_bar(LABEL, "KeyManager() OK")
 
 
 # ---------------------------------------------------------------------------
-# Шаг 2: Очистка / сборка EXE
+# Шаг 2: Очистка
 # ---------------------------------------------------------------------------
 
 def clean():
-    print("\n  [*] Чистка...")
-    for d in [
+    LABEL = "Clean dist/build"
+    dirs = [
         DIST_DIR,
         BUILD_DIR / "ZhoraWallet",
         BUILD_DIR / "SignOffline",
         BUILD_DIR / "ZhoraUSB",
-    ]:
+    ]
+    total = len(dirs)
+    for i, d in enumerate(dirs):
+        render_bar(LABEL, i, total, str(d.name))
         if d.exists():
             shutil.rmtree(d)
-            print(f"      Удалено: {d}")
-    print("  [OK] Очищено\n")
+        time.sleep(0.05)
+    done_bar(LABEL)
 
 
-def find_pyd(package: str) -> Path | None:
-    """
-    Находит .pyd / .so файл coldvault_core в site-packages.
-    PyInstaller добавляет его автоматически, но путь полезен для spec.
-    """
-    import importlib.util
-    spec = importlib.util.find_spec(package)
-    if spec and spec.origin:
-        return Path(spec.origin)
-    return None
-
+# ---------------------------------------------------------------------------
+# Шаг 3: PyInstaller
+# ---------------------------------------------------------------------------
 
 def build_exe(spec_name: str, display_name: str) -> bool:
+    LABEL = f"PyInstaller {display_name}"
     spec_path = BUILD_DIR / spec_name
     if not spec_path.exists():
-        print(f"  [!] Spec не найден: {spec_path}")
+        fail_bar(LABEL, f"spec not found: {spec_path}")
         return False
 
-    print(f"  [*] Сборка {display_name}...")
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        str(spec_path),
-        "--distpath", str(DIST_DIR),
-        "--workpath", str(BUILD_DIR / display_name.replace(".", "_")),
-        "--noconfirm",
-    ]
-    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "PyInstaller",
+         str(spec_path),
+         "--distpath", str(DIST_DIR),
+         "--workpath", str(BUILD_DIR / display_name.replace(".", "_")),
+         "--noconfirm"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    keywords = ["Analyzing","Processing","Building","Appending","Copying","Writing","Completed"]
+    seen = set()
+    steps = 10
+    progress = 0
+    lines_buf = []
+
+    for line in proc.stdout:
+        lines_buf.append(line)
+        stripped = line.strip()
+        for kw in keywords:
+            if kw in stripped and stripped not in seen:
+                seen.add(stripped)
+                progress = min(progress + 1, steps - 1)
+                short = stripped[:44]
+                render_bar(LABEL, progress, steps, short)
+                break
+
+    proc.wait()
+
     if proc.returncode == 0:
-        print(f"  [OK] {display_name} собран")
+        done_bar(LABEL)
         return True
     else:
-        print(f"  [!] Ошибка сборки {display_name}:")
-        for line in proc.stderr.strip().splitlines()[-15:]:
-            print(f"      {line}")
+        fail_bar(LABEL)
+        for l in lines_buf[-15:]:
+            print(f"    {C.RED}{l.rstrip()}{C.RESET}")
         return False
 
 
 # ---------------------------------------------------------------------------
-# Шаг 3: Пакетирование
+# Шаг 4: Пакет
 # ---------------------------------------------------------------------------
 
 def create_setup_package():
-    print("\n  [*] Создание дистрибутива...")
+    LABEL = "Package dist"
+    items = [
+        "ZhoraWallet.exe", "ZhoraUSB.exe", "SignOffline.exe",
+        "whl copy", "scripts", "docs", "INSTALL.bat",
+    ]
+    total = len(items)
     SETUP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # EXE-файлы
+    render_bar(LABEL, 0, total, "ZhoraWallet.exe")
     for exe, dest in [
         ("ZhoraWallet.exe", SETUP_DIR / "ZhoraWallet.exe"),
         ("ZhoraUSB.exe",    SETUP_DIR / "ZhoraUSB.exe"),
@@ -191,20 +367,19 @@ def create_setup_package():
         src = DIST_DIR / exe
         if src.exists():
             shutil.copy2(src, dest)
-            print(f"      [OK] {exe}")
+    render_bar(LABEL, 2, total, "SignOffline.exe")
 
     usb_dir = SETUP_DIR / "USB_Files"
     usb_dir.mkdir(exist_ok=True)
     signer = DIST_DIR / "SignOffline.exe"
     if signer.exists():
         shutil.copy2(signer, usb_dir / "SignOffline.exe")
-        print("      [OK] SignOffline.exe -> USB_Files/")
+    render_bar(LABEL, 3, total, "wheel copy")
 
-    # Копируем .whl для документации / dev-установки без сборки
     if RUST_TARGET.exists():
         for whl in RUST_TARGET.glob("coldvault_core-*.whl"):
             shutil.copy2(whl, SETUP_DIR / whl.name)
-            print(f"      [OK] {whl.name}")
+    render_bar(LABEL, 4, total, "scripts")
 
     scripts_dir = SETUP_DIR / "Scripts"
     scripts_dir.mkdir(exist_ok=True)
@@ -217,8 +392,6 @@ def create_setup_package():
         src = PROJECT_ROOT / s
         if src.exists():
             shutil.copy2(src, scripts_dir / Path(s).name)
-    print("      [OK] Scripts/")
-
     for cf in [
         "cold_wallet/__init__.py",
         "cold_wallet/core/__init__.py",
@@ -233,13 +406,13 @@ def create_setup_package():
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
             shutil.copy2(src, dst)
-    print("      [OK] cold_wallet/ модули")
+    render_bar(LABEL, 5, total, "docs")
 
     for doc in ["README.md", "SECURITY_AUDIT.md", "requirements.txt"]:
         src = PROJECT_ROOT / doc
         if src.exists():
             shutil.copy2(src, SETUP_DIR / doc)
-    print("      [OK] Документация")
+    render_bar(LABEL, 6, total, "INSTALL.bat")
 
     install_bat = r"""@echo off
 chcp 65001 >nul 2>&1
@@ -253,7 +426,7 @@ echo.
 echo  Выберите действие:
 echo.
 echo    1. Запустить ZhoraWallet (десктоп-кошелёк)
-echo    2. Установить на USB через ZhoraUSB (графический мастер) — РЕКОМЕНДУЕТСЯ
+echo    2. Установить на USB через ZhoraUSB (графический мастер)
 echo    3. Установить на USB (командная строка)
 echo    4. Выход
 echo.
@@ -266,19 +439,19 @@ pause
 """
     with open(SETUP_DIR / "INSTALL.bat", "w", encoding="utf-8") as f:
         f.write(install_bat)
-    print("      [OK] INSTALL.bat")
-    print(f"\n  [OK] Дистрибутив: {SETUP_DIR}")
+    done_bar(LABEL)
 
 
 # ---------------------------------------------------------------------------
-# Отчёт
+# Итог
 # ---------------------------------------------------------------------------
 
 def print_summary():
     print()
-    print("  ========================================")
-    print("         СБОРКА ЗАВЕРШЕНА!")
-    print("  ========================================")
+    print(C.GRAY + DIVIDER + C.RESET)
+    print(C.BOLD + C.GREEN + "\n  ✦  СБОРКА ЗАВЕРШЕНА!" + C.RESET)
+    print(C.GRAY + DIVIDER + C.RESET)
+    print()
     for name, label in [
         ("ZhoraWallet.exe", "десктоп-кошелёк"),
         ("SignOffline.exe",  "USB-подписьщик"),
@@ -287,60 +460,70 @@ def print_summary():
         p = DIST_DIR / name
         if p.exists():
             mb = p.stat().st_size / (1024 * 1024)
-            print(f"  {name:<20} {mb:>6.1f} MB  ({label})")
+            print(f"  {C.GREEN}✓{C.RESET}  {C.WHITE}{name:<22}{C.RESET}  {C.CYAN}{mb:>6.1f} MB{C.RESET}  {C.GRAY}({label}){C.RESET}")
         else:
-            print(f"  {name:<20} НЕ СОБРАН")
+            print(f"  {C.YELLOW}–{C.RESET}  {C.GRAY}{name:<22}  не собран{C.RESET}")
     print()
-    print("  dist/ColdVault_Setup/")
-    print("  ├── ZhoraWallet.exe")
-    print("  ├── ZhoraUSB.exe")
-    print("  ├── INSTALL.bat")
-    print("  ├── coldvault_core-*.whl   ← Rust-ядро")
-    print("  ├── USB_Files/SignOffline.exe")
-    print("  └── Scripts/")
-    print("  ========================================")
+    print(f"  {C.CYAN}📦 dist/ColdVault_Setup/{C.RESET}")
+    print(f"  {C.GRAY}├── ZhoraWallet.exe")
+    print(f"  ├── ZhoraUSB.exe")
+    print(f"  ├── INSTALL.bat")
+    print(f"  ├── coldvault_core-*.whl")
+    print(f"  ├── USB_Files/SignOffline.exe")
+    print(f"  └── Scripts/{C.RESET}")
+    print()
+    print(C.GRAY + DIVIDER + C.RESET)
+    print(C.BOLD + C.CYAN + "  made by Zhora  ·  ColdVault ETH" + C.RESET)
+    print(C.GRAY + DIVIDER + C.RESET)
+    print()
 
 
 # ---------------------------------------------------------------------------
 # Точка входа
 # ---------------------------------------------------------------------------
 
+TOTAL_STEPS = 5
+
 def main():
+    enable_ansi()
+
     parser = argparse.ArgumentParser(description="ColdVault Build System")
-    parser.add_argument("--desktop-only",   action="store_true", help="Только ZhoraWallet.exe")
-    parser.add_argument("--signer-only",    action="store_true", help="Только SignOffline.exe")
-    parser.add_argument("--installer-only", action="store_true", help="Только ZhoraUSB.exe")
-    parser.add_argument("--no-clean",       action="store_true", help="Не удалять предыдущую сборку")
-    parser.add_argument("--skip-rust",      action="store_true", help="Пропустить сборку Rust (если .whl уже установлен)")
+    parser.add_argument("--desktop-only",   action="store_true")
+    parser.add_argument("--signer-only",    action="store_true")
+    parser.add_argument("--installer-only", action="store_true")
+    parser.add_argument("--no-clean",       action="store_true")
+    parser.add_argument("--skip-rust",      action="store_true")
     args = parser.parse_args()
 
-    print()
-    print("  ========================================")
-    print("    ColdVault ETH - Build System v3")
-    print("  ========================================")
+    print_banner()
 
     # Проверка PyInstaller
     try:
         import PyInstaller
-        print(f"  [OK] PyInstaller {PyInstaller.__version__}")
+        ok(f"PyInstaller {PyInstaller.__version__}")
     except ImportError:
-        print("  [!] PyInstaller не установлен: pip install pyinstaller")
+        err("PyInstaller не установлен: pip install pyinstaller")
         sys.exit(1)
 
-    # --- Шаг 1: Rust ---
+    # ---- Шаг 1: Rust ----
+    step_header(1, TOTAL_STEPS, "Сборка Rust-ядра")
     if args.skip_rust:
-        print("  [~] Сборка Rust пропущена (--skip-rust)")
-        verify_rust_import()  # всё равно проверяем что модуль есть
+        warn("Сборка Rust пропущена (--skip-rust)")
+        verify_rust_import()
     else:
         whl = build_rust_core()
         install_wheel(whl)
         verify_rust_import()
 
-    # --- Шаг 2: Чистка ---
+    # ---- Шаг 2: Очистка ----
+    step_header(2, TOTAL_STEPS, "Очистка предыдущей сборки")
     if not args.no_clean:
         clean()
+    else:
+        warn("Очистка пропущена (--no-clean)")
 
-    # --- Шаг 3: PyInstaller ---
+    # ---- Шаг 3: PyInstaller ----
+    step_header(3, TOTAL_STEPS, "Сборка EXE (PyInstaller)")
     success = True
 
     if not (args.signer_only or args.installer_only):
@@ -352,14 +535,19 @@ def main():
     if not (args.desktop_only or args.signer_only):
         success &= build_exe("usb_installer.spec", "ZhoraUSB")
 
-    # --- Шаг 4: Пакет ---
-    if success:
-        create_setup_package()
-        print_summary()
-    else:
-        print("\n  [!] Сборка завершилась с ошибками.")
-        print("  [*] Проверьте зависимости: pip install -r requirements.txt")
+    if not success:
+        print()
+        err("Сборка завершилась с ошибками.")
+        warn("pip install -r requirements.txt && python build_all.py")
         sys.exit(1)
+
+    # ---- Шаг 4: Пакет ----
+    step_header(4, TOTAL_STEPS, "Создание дистрибутива")
+    create_setup_package()
+
+    # ---- Шаг 5: Итог ----
+    step_header(5, TOTAL_STEPS, "Готово")
+    print_summary()
 
 
 if __name__ == "__main__":
