@@ -380,6 +380,7 @@ fn derive_eth_key_from_seed(seed: &[u8]) -> PyResult<Vec<u8>> {
         .map_err(|e| VaultError::Crypto(format!("Путь: {e}")))?;
     let child = master.derive_path(&path)
         .map_err(|e| VaultError::Crypto(format!("HD: {e}")))?;
-    // coins-bip32 0.13: use key_material() instead of private_key()
-    Ok(child.key_material().to_vec())
+    // coins-bip32 0.13: XPriv implements AsRef<SigningKey>, use to_bytes() via k256
+    let signing_key: &k256::ecdsa::SigningKey = child.as_ref();
+    Ok(signing_key.to_bytes().to_vec())
 }
