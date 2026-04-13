@@ -1,0 +1,37 @@
+[package]
+name = "zhorawallet"
+version = "1.0.0"
+description = "ZhoraWallet - Ethereum Cold Wallet"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "zhorawallet_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies.tauri-build]
+version = "2.0.0"
+features = []
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+tauri-plugin-fs = "2.0.0"
+tauri-plugin-shell = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bip39 = "2.2"
+rand = "0.8"
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+base64 = "0.21"
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+chrono = "0.4"
+qrcode-generator = "4.1"
+tiny-keccak = { version = "2.0", features = ["sha3"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
