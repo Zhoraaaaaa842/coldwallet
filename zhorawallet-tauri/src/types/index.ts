@@ -11,6 +11,7 @@ export interface Transaction {
   timestamp: number
   status: 'pending' | 'confirmed' | 'failed'
   type: 'incoming' | 'outgoing'
+  tx_type?: 'incoming' | 'outgoing' // For cached transactions
   confirmations?: number
 }
 
@@ -45,5 +46,32 @@ export interface UsbTransaction {
 
 export interface PriceData {
   ethRub: number
+  lastUpdated: number
+}
+
+export interface Network {
+  id: string
+  name: string
+  networkType: string
+  chainId: number
+  rpcUrl: string
+  explorerUrl: string
+  currencySymbol: string
+  currencyDecimals: number
+}
+
+export interface Contact {
+  id: string
+  name: string
+  address: string
+  note?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BalanceSummary {
+  totalReceived: number
+  totalSent: number
+  transactionCount: number
   lastUpdated: number
 }

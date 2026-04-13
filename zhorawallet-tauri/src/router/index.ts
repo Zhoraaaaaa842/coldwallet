@@ -4,6 +4,7 @@ import Send from '@/views/Send.vue'
 import Receive from '@/views/Receive.vue'
 import SignBroadcast from '@/views/SignBroadcast.vue'
 import Settings from '@/views/Settings.vue'
+import AddressBook from '@/views/AddressBook.vue'
 
 const routes = [
   {
@@ -25,6 +26,11 @@ const routes = [
     path: '/sign',
     name: 'sign',
     component: SignBroadcast,
+  },
+  {
+    path: '/contacts',
+    name: 'contacts',
+    component: AddressBook,
   },
   {
     path: '/settings',

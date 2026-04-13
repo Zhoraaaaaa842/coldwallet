@@ -48,9 +48,9 @@
       </nav>
 
       <!-- Network & Version -->
-      <div class="p-4 border-t border-border">
+      <div class="p-4 border-t border-border space-y-3">
+        <NetworkSelector />
         <div class="text-xs text-text-muted space-y-1">
-          <p>{{ walletStore.state.network }}</p>
           <p>v1.0.0</p>
         </div>
       </div>
@@ -88,12 +88,13 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
-import { Send, QrCode, Shield, Settings, Home } from 'lucide-vue-next'
+import { Send, QrCode, Shield, Settings, Home, Users } from 'lucide-vue-next'
 import TitleBar from '@/components/TitleBar.vue'
 import ParticlesBackground from '@/components/ParticlesBackground.vue'
 import NotificationContainer from '@/components/NotificationContainer.vue'
 import PasswordDialog from '@/components/PasswordDialog.vue'
 import WalletInitDialog from '@/components/WalletInitDialog.vue'
+import NetworkSelector from '@/components/NetworkSelector.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -103,6 +104,7 @@ const navItems = [
   { path: '/', label: 'Кошелёк', icon: Home },
   { path: '/send', label: 'Отправить', icon: Send },
   { path: '/receive', label: 'Получить', icon: QrCode },
+  { path: '/contacts', label: 'Контакты', icon: Users },
   { path: '/sign', label: 'Подписать', icon: Shield },
   { path: '/settings', label: 'Настройки', icon: Settings },
 ]
@@ -144,6 +146,10 @@ async function handleImportWallet(mnemonic: string, password: string) {
 }
 
 onMounted(async () => {
+  // Load networks
+  await walletStore.loadNetworks()
+  await walletStore.loadCurrentNetwork()
+  
   // Check if wallet exists
   try {
     await walletStore.checkUsbStatus()

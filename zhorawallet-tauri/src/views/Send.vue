@@ -12,14 +12,49 @@
         <!-- Recipient Address -->
         <div>
           <label class="block text-sm text-text-secondary mb-2">Адрес получателя</label>
-          <input
-            v-model="recipientAddress"
-            type="text"
-            class="input-field"
-            placeholder="0x..."
-            :class="{ 'border-error': errors.address }"
-            @input="validateAddress"
-          />
+          <div class="relative">
+            <input
+              v-model="recipientAddress"
+              @focus="showContactsDropdown = true"
+              @blur="hideContactsDropdown"
+              type="text"
+              class="input-field pr-12"
+              placeholder="0x... или выберите из контактов"
+              :class="{ 'border-error': errors.address }"
+              @input="validateAddress"
+            />
+            <button
+              @click="toggleContactsDropdown"
+              class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+              title="Выбрать из контактов"
+            >
+              <Users class="w-4 h-4 text-text-muted" />
+            </button>
+
+            <!-- Contacts Dropdown -->
+            <div
+              v-if="showContactsDropdown && walletStore.contacts.length > 0"
+              class="absolute z-50 mt-2 w-full bg-bg-secondary border border-border rounded-lg shadow-2xl max-h-60 overflow-y-auto"
+            >
+              <div
+                v-for="contact in filteredContacts"
+                :key="contact.id"
+                @click="selectContact(contact)"
+                class="px-4 py-3 hover:bg-bg-hover cursor-pointer transition-colors flex items-center gap-3"
+              >
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                  {{ contact.name.charAt(0).toUpperCase() }}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-text-primary truncate">{{ contact.name }}</p>
+                  <p class="text-xs text-text-muted font-mono">{{ contact.address }}</p>
+                </div>
+              </div>
+              <div v-if="filteredContacts.length === 0" class="px-4 py-6 text-center text-text-muted text-sm">
+                Нет контактов, соответствующих запросу
+              </div>
+            </div>
+          </div>
           <p v-if="errors.address" class="text-error text-sm mt-2">{{ errors.address }}</p>
         </div>
 
@@ -28,6 +63,7 @@
           <label class="block text-sm text-text-secondary mb-2">Сумма (ETH)</label>
           <input
             v-model.number="amount"
+            @input="validateAmountField"
             type="number"
             class="input-field"
             placeholder="0.0"
@@ -175,6 +211,9 @@ import { useRoute } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { useNotification } from '@/composables/useNotification'
 import { invoke } from '@tauri-apps/api/core'
+import type { Contact } from '@/types'
+import { Users } from 'lucide-vue-next'
+import { validateEthereumAddress, validateTransactionAmount } from '@/utils/validation'
 
 const route = useRoute()
 const walletStore = useWalletStore()
@@ -186,6 +225,32 @@ const loading = ref(false)
 const submitError = ref('')
 const submitSuccess = ref(false)
 const errors = ref<{ address?: string; amount?: string }>({})
+
+// Contacts dropdown
+const showContactsDropdown = ref(false)
+
+// Filtered contacts based on search
+const filteredContacts = computed(() => {
+  return walletStore.contacts
+})
+
+function toggleContactsDropdown() {
+  showContactsDropdown.value = !showContactsDropdown.value
+}
+
+function hideContactsDropdown() {
+  // Delay to allow click on contact
+  setTimeout(() => {
+    showContactsDropdown.value = false
+  }, 200)
+}
+
+function selectContact(contact: Contact) {
+  recipientAddress.value = contact.address
+  showContactsDropdown.value = false
+  validateAddress()
+  success(`Выбран контакт: ${contact.name}`)
+}
 
 const canSubmit = computed(() => {
   return recipientAddress.value && 
@@ -214,23 +279,28 @@ function validateAddress() {
     errors.value.address = ''
     return
   }
-  
-  if (!addr.startsWith('0x')) {
-    errors.value.address = 'Адрес должен начинаться с 0x'
+
+  const result = validateEthereumAddress(addr)
+  errors.value.address = result.error
+}
+
+function validateAmountField() {
+  const amt = amount.value.toString()
+  if (!amt || amt === '0') {
+    errors.value.amount = ''
     return
   }
+
+  const result = validateTransactionAmount(amt)
+  errors.value.amount = result.error
   
-  if (addr.length !== 42) {
-    errors.value.address = 'Неверная длина адреса'
-    return
+  // Additional balance check
+  if (result.valid) {
+    const balance = parseFloat(walletStore.balanceEth)
+    if (amount.value > balance) {
+      errors.value.amount = 'Недостаточно средств на балансе'
+    }
   }
-  
-  if (!addr.match(/^0x[0-9a-fA-F]{40}$/)) {
-    errors.value.address = 'Неверный формат адреса'
-    return
-  }
-  
-  errors.value.address = ''
 }
 
 function setMaxAmount() {
@@ -297,7 +367,10 @@ async function createTransaction() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // Load contacts
+  await walletStore.loadContacts()
+  
   // Pre-fill from query params (from QR scan)
   if (route.query.to) {
     recipientAddress.value = route.query.to as string

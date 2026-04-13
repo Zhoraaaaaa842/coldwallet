@@ -73,7 +73,23 @@
 
         <div class="card hover:border-border-light transition-colors duration-200">
           <p class="text-text-muted text-xs font-medium uppercase tracking-wider">Сеть</p>
-          <p class="text-lg font-semibold text-white mt-2">{{ walletStore.state.network }}</p>
+          <p class="text-lg font-semibold text-white mt-2">{{ walletStore.currentNetwork?.name || walletStore.state.network }}</p>
+        </div>
+
+        <div class="card hover:border-border-light transition-colors duration-200">
+          <p class="text-text-muted text-xs font-medium uppercase tracking-wider">Получено</p>
+          <p class="text-2xl font-bold text-success mt-2">{{ balanceSummaryData.totalReceived.toFixed(6) }} ETH</p>
+          <p class="text-xs text-text-dim mt-1">
+            {{ balanceSummaryData.transactionCount }} транзакций
+          </p>
+        </div>
+
+        <div class="card hover:border-border-light transition-colors duration-200">
+          <p class="text-text-muted text-xs font-medium uppercase tracking-wider">Отправлено</p>
+          <p class="text-2xl font-bold text-error mt-2">{{ balanceSummaryData.totalSent.toFixed(6) }} ETH</p>
+          <p class="text-xs text-text-dim mt-1">
+            Обновлено: {{ formatBalanceSummaryLastUpdated() }}
+          </p>
         </div>
 
         <div class="card hover:border-border-light transition-colors duration-200">
@@ -150,7 +166,7 @@ import { useRouter } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { useNotification } from '@/composables/useNotification'
 import TransactionItem from '@/components/TransactionItem.vue'
-import type { Transaction } from '@/types'
+import type { Transaction, BalanceSummary } from '@/types'
 
 const router = useRouter()
 const walletStore = useWalletStore()
@@ -158,6 +174,12 @@ const { success, error: showError } = useNotification()
 
 const loading = ref(false)
 const currentFilter = ref('Все')
+const balanceSummaryData = ref<BalanceSummary>({
+  totalReceived: 0,
+  totalSent: 0,
+  transactionCount: 0,
+  lastUpdated: 0,
+})
 
 const displayAddress = computed(() => {
   if (!walletStore.state.address) return '0x...'
@@ -166,13 +188,24 @@ const displayAddress = computed(() => {
 })
 
 const filteredTransactions = computed(() => {
-  if (currentFilter.value === 'Все') return walletStore.transactions
-  if (currentFilter.value === 'Входящие') 
-    return walletStore.transactions.filter(tx => tx.type === 'incoming')
-  if (currentFilter.value === 'Исходящие')
-    return walletStore.transactions.filter(tx => tx.type === 'outgoing')
-  return walletStore.transactions
+  const txs = walletStore.transactions
+  if (currentFilter.value === 'Все') return txs
+  
+  return txs.filter(tx => {
+    const txType = tx.tx_type || tx.type
+    if (currentFilter.value === 'Входящие') return txType === 'incoming'
+    if (currentFilter.value === 'Исходящие') return txType === 'outgoing'
+    return true
+  })
 })
+
+function formatBalanceSummaryLastUpdated(): string {
+  if (!balanceSummaryData.value.lastUpdated) return '-'
+  return new Date(balanceSummaryData.value.lastUpdated).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function shouldShowDate(tx: Transaction): boolean {
   const idx = walletStore.transactions.indexOf(tx)
@@ -227,13 +260,22 @@ async function refreshBalance() {
     await Promise.all([
       walletStore.fetchBalance(),
       walletStore.fetchNonce(),
-      walletStore.fetchTransactions(),
+      walletStore.getCachedTransactions(),
+      loadBalanceSummary(),
     ])
     success('Данные обновлены')
   } catch (err) {
     showError('Не удалось обновить данные')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadBalanceSummary() {
+  try {
+    balanceSummaryData.value = await walletStore.getBalanceSummary()
+  } catch (error) {
+    console.error('Failed to load balance summary:', error)
   }
 }
 

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { WalletState, GasSettings, Transaction, PriceData } from '@/types'
+import type { WalletState, GasSettings, Transaction, PriceData, Network, Contact, BalanceSummary } from '@/types'
 import { invoke } from '@tauri-apps/api/core'
 
 export const useWalletStore = defineStore('wallet', () => {
@@ -28,6 +28,13 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const usbStatus = ref<'connected' | 'disconnected'>('disconnected')
   const broadcastLog = ref<string[]>([])
+  
+  // Network state
+  const availableNetworks = ref<Network[]>([])
+  const currentNetwork = ref<Network | null>(null)
+  
+  // Address book state
+  const contacts = ref<Contact[]>([])
 
   // Computed
   const isWalletReady = computed(() => 
@@ -153,6 +160,134 @@ export const useWalletStore = defineStore('wallet', () => {
     broadcastLog.value = []
   }
 
+  // Network actions
+  async function loadNetworks() {
+    try {
+      const networks = await invoke<Network[]>('get_all_networks')
+      availableNetworks.value = networks
+    } catch (error) {
+      console.error('Failed to load networks:', error)
+    }
+  }
+
+  async function loadCurrentNetwork() {
+    try {
+      const network = await invoke<Network>('get_current_network')
+      currentNetwork.value = network
+      state.value.network = network.name
+    } catch (error) {
+      console.error('Failed to load current network:', error)
+    }
+  }
+
+  async function switchNetwork(networkId: string) {
+    try {
+      const network = await invoke<Network>('switch_network', { networkId })
+      currentNetwork.value = network
+      state.value.network = network.name
+      // Refresh data after network switch
+      await fetchBalance()
+      await fetchTransactions()
+    } catch (error) {
+      console.error('Failed to switch network:', error)
+      throw error
+    }
+  }
+
+  // Address Book actions
+  async function loadContacts() {
+    try {
+      const contactsList = await invoke<Contact[]>('get_all_contacts')
+      contacts.value = contactsList
+    } catch (error) {
+      console.error('Failed to load contacts:', error)
+      contacts.value = []
+    }
+  }
+
+  async function addContact(name: string, address: string, note?: string) {
+    try {
+      const contact = await invoke<Contact>('add_contact', { name, address, note })
+      contacts.value.push(contact)
+      return contact
+    } catch (error) {
+      console.error('Failed to add contact:', error)
+      throw error
+    }
+  }
+
+  async function updateContact(id: string, name: string, address: string, note?: string) {
+    try {
+      await invoke('update_contact', { id, name, address, note })
+      const index = contacts.value.findIndex(c => c.id === id)
+      if (index !== -1) {
+        contacts.value[index] = {
+          ...contacts.value[index],
+          name,
+          address,
+          note,
+          updatedAt: Date.now(),
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update contact:', error)
+      throw error
+    }
+  }
+
+  async function deleteContact(id: string) {
+    try {
+      await invoke('delete_contact', { id })
+      contacts.value = contacts.value.filter(c => c.id !== id)
+    } catch (error) {
+      console.error('Failed to delete contact:', error)
+      throw error
+    }
+  }
+
+  async function searchContacts(query: string) {
+    try {
+      const results = await invoke<Contact[]>('search_contacts', { query })
+      return results
+    } catch (error) {
+      console.error('Failed to search contacts:', error)
+      return []
+    }
+  }
+
+  // Transaction Cache actions
+  async function getCachedTransactions(forceRefresh = false): Promise<Transaction[]> {
+    if (!state.value.address) return []
+    
+    try {
+      const txs = await invoke<Transaction[]>('get_cached_transactions', {
+        address: state.value.address,
+        forceRefresh
+      })
+      transactions.value = txs
+      return txs
+    } catch (error) {
+      console.error('Failed to get cached transactions:', error)
+      return []
+    }
+  }
+
+  async function getBalanceSummary(): Promise<BalanceSummary> {
+    if (!state.value.address) {
+      return { totalReceived: 0, totalSent: 0, transactionCount: 0, lastUpdated: 0 }
+    }
+    
+    try {
+      const summary = await invoke<BalanceSummary>('get_balance_summary', {
+        address: state.value.address
+      })
+      return summary
+    } catch (error) {
+      console.error('Failed to get balance summary:', error)
+      return { totalReceived: 0, totalSent: 0, transactionCount: 0, lastUpdated: 0 }
+    }
+  }
+
   // Start polling for updates
   let pollingInterval: number | null = null
 
@@ -186,6 +321,9 @@ export const useWalletStore = defineStore('wallet', () => {
     currentGasSettings,
     usbStatus,
     broadcastLog,
+    availableNetworks,
+    currentNetwork,
+    contacts,
     isWalletReady,
     balanceEth,
     balanceRub,
@@ -201,6 +339,16 @@ export const useWalletStore = defineStore('wallet', () => {
     fetchTransactions,
     addBroadcastLog,
     clearBroadcastLog,
+    loadNetworks,
+    loadCurrentNetwork,
+    switchNetwork,
+    loadContacts,
+    addContact,
+    updateContact,
+    deleteContact,
+    searchContacts,
+    getCachedTransactions,
+    getBalanceSummary,
     startPolling,
     stopPolling,
   }
