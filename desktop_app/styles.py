@@ -1,30 +1,29 @@
 """
-ColdVault ETH — Стили PyQt6 в стиле Ledger Live.
-Тёмная тема с акцентным фиолетовым (#A855F7) на чёрном фоне.
+ColdVault ETH — Стили PyQt6.
+Строгая чёрная тема с белым акцентом.
 """
 
 COLORS = {
-    "bg_primary":   "#0F0F13",
-    "bg_secondary": "#17171C",
-    "bg_tertiary":  "#1E1E26",
-    "bg_hover":     "#252530",
-    "border":       "#2A2A35",
-    "border_focus": "#A855F7",
-    "text_primary": "#FFFFFF",
-    "text_secondary": "#9CA3AF",
-    "text_muted":   "#6B7280",
-    "accent":       "#A855F7",
-    "accent_hover": "#9333EA",
-    "accent_dark":  "#7C3AED",
-    "success":      "#22C55E",
-    "warning":      "#F59E0B",
-    "error":        "#EF4444",
-    "eth_blue":     "#627EEA",
+    "bg_primary":     "#000000",
+    "bg_secondary":   "#0A0A0A",
+    "bg_tertiary":    "#111111",
+    "bg_hover":       "#1A1A1A",
+    "border":         "#222222",
+    "border_focus":   "#444444",
+    "text_primary":   "#FFFFFF",
+    "text_secondary": "#AAAAAA",
+    "text_muted":     "#555555",
+    "accent":         "#FFFFFF",
+    "accent_hover":   "#CCCCCC",
+    "accent_dark":    "#999999",
+    "success":        "#22C55E",
+    "warning":        "#F59E0B",
+    "error":          "#EF4444",
+    "eth_blue":       "#AAAAAA",
 }
 
 
 MAIN_STYLESHEET = f"""
-    /* ─── Глобальные — ТОЛЬКО цвет текста и шрифт, БЕЗ background ─── */
     QMainWindow {{
         background-color: {COLORS['bg_primary']};
     }}
@@ -33,9 +32,9 @@ MAIN_STYLESHEET = f"""
         color: {COLORS['text_primary']};
         font-family: 'Segoe UI', 'Inter', 'Arial', sans-serif;
         font-size: 14px;
+        background-color: {COLORS['bg_primary']};
     }}
 
-    /* Фон задаём явно только нужным корневым контейнерам */
     QStackedWidget,
     QScrollArea > QWidget > QWidget {{
         background-color: {COLORS['bg_primary']};
@@ -51,10 +50,10 @@ MAIN_STYLESHEET = f"""
         background-color: transparent;
         color: {COLORS['text_secondary']};
         border: none;
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 12px 16px;
         text-align: left;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
     }}
 
@@ -64,27 +63,28 @@ MAIN_STYLESHEET = f"""
     }}
 
     QPushButton#sidebarBtn:checked {{
-        background-color: {COLORS['accent']};
+        background-color: {COLORS['bg_tertiary']};
         color: {COLORS['text_primary']};
+        border-left: 2px solid {COLORS['text_primary']};
     }}
 
     /* ─── Карточки ─── */
     QFrame#card {{
         background-color: {COLORS['bg_secondary']};
         border: 1px solid {COLORS['border']};
-        border-radius: 16px;
+        border-radius: 12px;
         padding: 20px;
     }}
 
-    /* ─── Кнопки ─── */
+    /* ─── Основная кнопка ─── */
     QPushButton#primaryBtn {{
-        background-color: {COLORS['accent']};
-        color: white;
+        background-color: {COLORS['text_primary']};
+        color: {COLORS['bg_primary']};
         border: none;
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 12px 24px;
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 14px;
+        font-weight: 700;
         min-height: 44px;
     }}
 
@@ -103,26 +103,44 @@ MAIN_STYLESHEET = f"""
 
     QPushButton#secondaryBtn {{
         background-color: transparent;
-        color: {COLORS['accent']};
-        border: 2px solid {COLORS['accent']};
-        border-radius: 12px;
+        color: {COLORS['text_secondary']};
+        border: 1px solid {COLORS['border']};
+        border-radius: 8px;
         padding: 12px 24px;
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 600;
         min-height: 44px;
     }}
 
     QPushButton#secondaryBtn:hover {{
-        background-color: rgba(168, 85, 247, 0.1);
+        background-color: {COLORS['bg_hover']};
+        color: {COLORS['text_primary']};
+        border-color: {COLORS['border_focus']};
+    }}
+
+    QPushButton#maxBtn {{
+        background-color: {COLORS['bg_tertiary']};
+        color: {COLORS['text_primary']};
+        border: 1px solid {COLORS['border_focus']};
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        min-height: 32px;
+    }}
+
+    QPushButton#maxBtn:hover {{
+        background-color: {COLORS['bg_hover']};
+        border-color: {COLORS['text_primary']};
     }}
 
     QPushButton#dangerBtn {{
         background-color: {COLORS['error']};
         color: white;
         border: none;
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 12px 24px;
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 600;
         min-height: 44px;
     }}
@@ -133,17 +151,17 @@ MAIN_STYLESHEET = f"""
 
     /* ─── Поля ввода ─── */
     QLineEdit {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
-        border: 2px solid {COLORS['border']};
-        border-radius: 10px;
+        border: 1px solid {COLORS['border']};
+        border-radius: 8px;
         padding: 10px 14px;
         font-size: 14px;
-        selection-background-color: {COLORS['accent']};
+        selection-background-color: {COLORS['bg_hover']};
     }}
 
     QLineEdit:focus {{
-        border: 2px solid {COLORS['border_focus']};
+        border: 1px solid {COLORS['border_focus']};
     }}
 
     QLineEdit:disabled {{
@@ -151,29 +169,29 @@ MAIN_STYLESHEET = f"""
     }}
 
     QSpinBox, QDoubleSpinBox {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
-        border: 2px solid {COLORS['border']};
-        border-radius: 10px;
+        border: 1px solid {COLORS['border']};
+        border-radius: 8px;
         padding: 10px 14px;
         font-size: 14px;
     }}
 
     QSpinBox:focus, QDoubleSpinBox:focus {{
-        border: 2px solid {COLORS['border_focus']};
+        border: 1px solid {COLORS['border_focus']};
     }}
 
     QComboBox {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
-        border: 2px solid {COLORS['border']};
-        border-radius: 10px;
+        border: 1px solid {COLORS['border']};
+        border-radius: 8px;
         padding: 10px 14px;
         font-size: 14px;
     }}
 
     QComboBox:focus {{
-        border: 2px solid {COLORS['border_focus']};
+        border: 1px solid {COLORS['border_focus']};
     }}
 
     QComboBox::drop-down {{
@@ -182,17 +200,17 @@ MAIN_STYLESHEET = f"""
     }}
 
     QComboBox QAbstractItemView {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
         border: 1px solid {COLORS['border']};
-        selection-background-color: {COLORS['accent']};
+        selection-background-color: {COLORS['bg_hover']};
     }}
 
     QTextEdit {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_secondary']};
         border: 1px solid {COLORS['border']};
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 10px;
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 13px;
@@ -201,13 +219,13 @@ MAIN_STYLESHEET = f"""
     /* ─── Labels ─── */
     QLabel#titleLabel {{
         color: {COLORS['text_primary']};
-        font-size: 28px;
+        font-size: 26px;
         font-weight: 700;
     }}
 
     QLabel#subtitleLabel {{
-        color: {COLORS['text_secondary']};
-        font-size: 14px;
+        color: {COLORS['text_muted']};
+        font-size: 13px;
     }}
 
     QLabel#balanceLabel {{
@@ -223,12 +241,12 @@ MAIN_STYLESHEET = f"""
     }}
 
     QLabel#networkLabel {{
-        color: {COLORS['eth_blue']};
-        font-size: 12px;
+        color: {COLORS['text_muted']};
+        font-size: 11px;
         font-weight: 600;
-        background-color: rgba(98, 126, 234, 0.15);
-        border-radius: 6px;
-        padding: 4px 10px;
+        background-color: {COLORS['bg_tertiary']};
+        border-radius: 4px;
+        padding: 3px 8px;
     }}
 
     /* ─── ScrollArea ─── */
@@ -239,13 +257,13 @@ MAIN_STYLESHEET = f"""
 
     QScrollBar:vertical {{
         background-color: {COLORS['bg_primary']};
-        width: 8px;
-        border-radius: 4px;
+        width: 6px;
+        border-radius: 3px;
     }}
 
     QScrollBar::handle:vertical {{
         background-color: {COLORS['border']};
-        border-radius: 4px;
+        border-radius: 3px;
         min-height: 30px;
     }}
 
@@ -257,67 +275,39 @@ MAIN_STYLESHEET = f"""
         height: 0;
     }}
 
-    /* ─── Tab Widget ─── */
-    QTabWidget::pane {{
-        border: 1px solid {COLORS['border']};
-        border-radius: 8px;
-        background-color: {COLORS['bg_secondary']};
-    }}
-
-    QTabBar::tab {{
-        background-color: {COLORS['bg_tertiary']};
-        color: {COLORS['text_secondary']};
-        border: none;
-        padding: 10px 20px;
-        font-weight: 500;
-    }}
-
-    QTabBar::tab:selected {{
-        background-color: {COLORS['accent']};
-        color: white;
-        border-radius: 6px 6px 0 0;
-    }}
-
-    /* ─── ProgressBar ─── */
     QProgressBar {{
         background-color: {COLORS['bg_tertiary']};
         border: none;
-        border-radius: 6px;
-        height: 8px;
-        text-align: center;
+        border-radius: 4px;
+        height: 6px;
         color: transparent;
     }}
 
     QProgressBar::chunk {{
-        background-color: {COLORS['accent']};
-        border-radius: 6px;
+        background-color: {COLORS['text_primary']};
+        border-radius: 4px;
     }}
 
     QToolTip {{
-        background-color: {COLORS['bg_tertiary']};
+        background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
         border: 1px solid {COLORS['border']};
-        border-radius: 6px;
-        padding: 6px 10px;
-        font-size: 13px;
+        border-radius: 4px;
+        padding: 5px 8px;
+        font-size: 12px;
     }}
 """
 
 
 CARD_BALANCE_STYLE = f"""
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #1A1033,
-        stop:0.5 #1C1040,
-        stop:1 #0F0F13
-    );
-    border: 1px solid {COLORS['accent']};
-    border-radius: 20px;
-    padding: 30px;
+    background-color: {COLORS['bg_secondary']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 16px;
+    padding: 28px;
 """
 
 ETH_ICON_STYLE = f"""
-    color: {COLORS['eth_blue']};
-    font-size: 36px;
+    color: {COLORS['text_secondary']};
+    font-size: 32px;
     font-weight: 700;
 """

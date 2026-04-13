@@ -1,6 +1,7 @@
 """
 ZhoraWallet ETH — Главное окно десктоп-приложения.
-Редизайн под мобильный макет: история транзакций, фильтры, кнопка Etherscan.
+Чёрная тема, без вкладки Настройки, кнопка MAX для отправки всей суммы,
+фикс краша при подписи транзакции.
 """
 
 import os
@@ -47,7 +48,7 @@ from desktop_app.styles import (
 # ─── Поток получения цены ETH в рублях (CoinGecko) ─── #
 
 class PriceWorker(QThread):
-    price_ready = pyqtSignal(float)  # цена 1 ETH в RUB
+    price_ready = pyqtSignal(float)
     error = pyqtSignal(str)
 
     COINGECKO_URL = (
@@ -78,7 +79,7 @@ class NetworkWorker(QThread):
     balance_ready = pyqtSignal(dict)
     gas_ready = pyqtSignal(dict)
     nonce_ready = pyqtSignal(int)
-    tx_sent = pyqtSignal(dict)   # FIX: было str, теперь dict со статусом TX
+    tx_sent = pyqtSignal(dict)
     tx_history_ready = pyqtSignal(list)
     error = pyqtSignal(str)
 
@@ -129,7 +130,6 @@ class NetworkWorker(QThread):
                 result = self._eth.get_nonce(self._params["address"])
                 self.nonce_ready.emit(result)
             elif self._task == "send_tx":
-                # FIX: broadcast_transaction теперь возвращает dict, а не str
                 result = self._eth.broadcast_transaction(self._params["raw_tx"])
                 self.tx_sent.emit(result)
             elif self._task == "tx_history":
@@ -142,7 +142,7 @@ class NetworkWorker(QThread):
             self.error.emit(str(e))
 
 
-# ─── Виджет одной транзакции (редизайн) ─── #
+# ─── Виджет одной транзакции ─── #
 
 class TxItemWidget(QFrame):
     def __init__(self, tx: dict, my_address: str, eth_price_rub: float = 0.0, parent=None):
@@ -157,50 +157,44 @@ class TxItemWidget(QFrame):
         is_incoming = from_addr != my_addr_lower
         self.tx_type = "in" if is_incoming else "out"
 
-        # Цвета
         icon_color = COLORS["success"] if is_incoming else COLORS["error"]
-        icon_bg = "rgba(34,197,94,0.12)" if is_incoming else "rgba(239,68,68,0.12)"
+        icon_bg = "rgba(34,197,94,0.10)" if is_incoming else "rgba(239,68,68,0.10)"
         arrow = "↓" if is_incoming else "↑"
-        type_text = "Перевод"
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(12)
 
-        # Иконка-стрелка
         icon_lbl = QLabel(arrow)
-        icon_lbl.setFixedSize(40, 40)
+        icon_lbl.setFixedSize(36, 36)
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_lbl.setStyleSheet(
-            f"color: {icon_color}; background: {icon_bg}; border-radius: 20px;"
-            f" font-size: 17px; font-weight: 800;"
+            f"color: {icon_color}; background: {icon_bg}; border-radius: 18px;"
+            f" font-size: 16px; font-weight: 800;"
         )
         layout.addWidget(icon_lbl)
 
-        # Центральный блок: тип + адрес + время
         info = QVBoxLayout()
-        info.setSpacing(3)
+        info.setSpacing(2)
 
-        type_lbl = QLabel(type_text)
+        type_lbl = QLabel("Перевод")
         type_lbl.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 14px; font-weight: 600;"
+            f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 600;"
         )
         info.addWidget(type_lbl)
 
         peer = tx.get("from", "") if is_incoming else tx.get("to", "")
         prefix = "от: " if is_incoming else "на: "
-        if peer and len(peer) > 20:
-            peer_short = peer[:10] + "…" + peer[-8:]
-        else:
-            peer_short = peer or "—"
+        peer_short = (peer[:10] + "…" + peer[-8:]) if peer and len(peer) > 20 else (peer or "—")
         addr_lbl = QLabel(prefix + peer_short)
         addr_lbl.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 12px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px;"
             f" font-family: Consolas, monospace;"
         )
         info.addWidget(addr_lbl)
 
         ts = tx.get("timeStamp") or tx.get("timestamp")
+        time_str = ""
         if ts:
             try:
                 dt = datetime.datetime.fromtimestamp(int(ts))
@@ -214,7 +208,6 @@ class TxItemWidget(QFrame):
         info.addWidget(time_lbl)
         layout.addLayout(info, 1)
 
-        # Правый блок: сумма ETH + сумма RUB + статус
         right = QVBoxLayout()
         right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         right.setSpacing(2)
@@ -224,48 +217,34 @@ class TxItemWidget(QFrame):
         sign = "+" if is_incoming else "−"
         amount_lbl = QLabel(f"{sign}{value_eth:.6f} ETH")
         amount_lbl.setStyleSheet(
-            f"color: {icon_color}; font-size: 14px; font-weight: 700;"
+            f"color: {icon_color}; font-size: 13px; font-weight: 700;"
         )
         amount_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right.addWidget(amount_lbl)
 
-        # Конвертация в рубли
         if eth_price_rub > 0 and value_eth > 0:
             rub_val = value_eth * eth_price_rub
             rub_lbl = QLabel(f"≈ {rub_val:,.2f} ₽".replace(",", " "))
             rub_lbl.setStyleSheet(
-                f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 500;"
+                f"color: {COLORS['text_muted']}; font-size: 11px;"
             )
             rub_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             right.addWidget(rub_lbl)
 
-        # Подтверждение
-        status_row = QHBoxLayout()
-        status_row.setAlignment(Qt.AlignmentFlag.AlignRight)
-        status_row.setSpacing(4)
-        dot = QLabel("●")
-        dot.setStyleSheet(f"color: {COLORS['success']}; font-size: 7px;")
-        status_row.addWidget(dot)
-        conf_lbl = QLabel("Подтверждено")
-        conf_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        status_row.addWidget(conf_lbl)
-        right.addLayout(status_row)
-
         layout.addLayout(right)
 
-        # Hover-эффект через стиль
         self._base_style = (
             f"QFrame#txCard {{"
             f"  background: {COLORS['bg_secondary']};"
             f"  border: 1px solid {COLORS['border']};"
-            f"  border-radius: 14px;"
+            f"  border-radius: 10px;"
             f"}}"
         )
         self._hover_style = (
             f"QFrame#txCard {{"
             f"  background: {COLORS['bg_hover']};"
-            f"  border: 1px solid {COLORS.get('border_focus', COLORS['accent'])};"
-            f"  border-radius: 14px;"
+            f"  border: 1px solid {COLORS['border_focus']};"
+            f"  border-radius: 10px;"
             f"}}"
         )
         self.setStyleSheet(self._base_style)
@@ -323,7 +302,7 @@ class ColdVaultMainWindow(QMainWindow):
 
         QTimer.singleShot(500, self._detect_usb)
         self._usb_timer = QTimer(self)
-        self._usb_timer.setInterval(3_000)          # опрос USB каждые 3 сек
+        self._usb_timer.setInterval(3_000)
         self._usb_timer.timeout.connect(self._detect_usb)
         self._usb_timer.start()
 
@@ -360,38 +339,37 @@ class ColdVaultMainWindow(QMainWindow):
         self._stack.addWidget(self._build_send_page())         # 1
         self._stack.addWidget(self._build_receive_page())      # 2
         self._stack.addWidget(self._build_sign_page())         # 3
-        self._stack.addWidget(self._build_settings_page())     # 4
         main_layout.addWidget(self._stack, 1)
 
-    # ─── Sidebar ─── #
+    # ─── Sidebar (без вкладки Настройки) ─── #
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(210)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(12, 20, 12, 20)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
 
-        logo = QLabel("◈ ZhoraWallet")
+        logo = QLabel("ZhoraWallet")
         logo.setStyleSheet(
-            f"color: {COLORS['accent']}; font-size: 22px; font-weight: 700;"
-            f" padding: 10px 8px 20px;"
+            f"color: {COLORS['text_primary']}; font-size: 20px; font-weight: 700;"
+            f" padding: 8px 8px 20px; letter-spacing: 1px;"
         )
         layout.addWidget(logo)
 
         self._usb_status = QLabel("● USB отключён")
         self._usb_status.setStyleSheet(
-            f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;"
+            f"color: {COLORS['error']}; font-size: 11px; padding: 2px 8px 14px;"
         )
         layout.addWidget(self._usb_status)
 
+        # 4 вкладки — без Настроек
         nav_items = [
-            ("⌂  Кошелёк", 0),
-            ("↗  Отправить", 1),
-            ("▤  Получить (QR)", 2),
-            ("✎  Подписать & Отправить", 3),
-            ("⚙  Настройки", 4),
+            ("Кошелёк", 0),
+            ("Отправить", 1),
+            ("Получить (QR)", 2),
+            ("Подписать & Отправить", 3),
         ]
 
         self._nav_buttons = []
@@ -411,7 +389,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._network_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._network_label)
 
-        ver = QLabel("v1.0.0")
+        ver = QLabel("v1.1.0")
         ver.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; padding: 8px;")
         ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(ver)
@@ -428,8 +406,8 @@ class ColdVaultMainWindow(QMainWindow):
         scroll.setObjectName("dashScroll")
 
         layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(36, 28, 36, 28)
-        layout.setSpacing(18)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(16)
 
         header = QHBoxLayout()
         title = QLabel("Кошелёк")
@@ -445,46 +423,46 @@ class ColdVaultMainWindow(QMainWindow):
         balance_card.setStyleSheet(CARD_BALANCE_STYLE)
         bc_layout = QVBoxLayout(balance_card)
         bc_layout.setSpacing(4)
-        bc_layout.setContentsMargins(28, 24, 28, 24)
+        bc_layout.setContentsMargins(24, 20, 24, 20)
 
         top_row = QHBoxLayout()
         eth_icon = QLabel("Ξ Ethereum")
         eth_icon.setStyleSheet(ETH_ICON_STYLE)
         top_row.addWidget(eth_icon)
         top_row.addStretch()
-        net_badge = QLabel("Основная сеть")
+        net_badge = QLabel("Mainnet")
         net_badge.setStyleSheet(
-            f"color: {COLORS['eth_blue']}; font-size: 12px; font-weight: 600;"
-            f" background: rgba(98,126,234,0.15); border-radius: 6px; padding: 3px 10px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600;"
+            f" background: {COLORS['bg_tertiary']}; border-radius: 4px; padding: 2px 8px;"
         )
         top_row.addWidget(net_badge)
         bc_layout.addLayout(top_row)
 
         bal_title = QLabel("Баланс")
         bal_title.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 14px; font-weight: 600;"
-            f" letter-spacing: 0.5px; margin-top: 12px;"
+            f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 600;"
+            f" letter-spacing: 0.5px; margin-top: 10px;"
         )
         bc_layout.addWidget(bal_title)
 
         self._balance_rub_label = QLabel("— ₽")
         self._balance_rub_label.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 46px; font-weight: 800;"
-            f" letter-spacing: -1px; line-height: 1;"
+            f"color: {COLORS['text_primary']}; font-size: 44px; font-weight: 800;"
+            f" letter-spacing: -1px;"
         )
         bc_layout.addWidget(self._balance_rub_label)
 
         self._balance_label = QLabel("—")
         self._balance_label.setObjectName("balanceLabel")
         self._balance_label.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 16px; font-weight: 500;"
+            f"color: {COLORS['text_secondary']}; font-size: 15px; font-weight: 500;"
             f" margin-top: 2px;"
         )
         bc_layout.addWidget(self._balance_label)
 
         self._market_price_label = QLabel("Загрузка курса…")
         self._market_price_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 12px; margin-top: 6px;"
+            f"color: {COLORS['text_muted']}; font-size: 12px; margin-top: 4px;"
         )
         bc_layout.addWidget(self._market_price_label)
 
@@ -493,16 +471,12 @@ class ColdVaultMainWindow(QMainWindow):
         self._address_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self._address_label.setToolTip("Нажмите для копирования")
         self._address_label.mousePressEvent = self._copy_address
-        self._address_label.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 13px;"
-            f" font-family: Consolas, monospace; margin-top: 8px;"
-        )
         bc_layout.addWidget(self._address_label)
 
         layout.addWidget(balance_card)
 
         actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(10)
+        actions_layout.setSpacing(8)
 
         btn_recv = QPushButton("↓  Получить")
         btn_recv.setObjectName("primaryBtn")
@@ -527,33 +501,14 @@ class ColdVaultMainWindow(QMainWindow):
 
         layout.addLayout(actions_layout)
 
-        self._btn_etherscan = QPushButton("⧉  Открыть в обозревателе блокчейна (Etherscan)")
-        self._btn_etherscan.setObjectName("etherscanBtn")
-        self._btn_etherscan.setMinimumHeight(44)
-        self._btn_etherscan.setStyleSheet(
-            f"QPushButton {{"
-            f"  color: {COLORS['eth_blue']};"
-            f"  background: rgba(98,126,234,0.10);"
-            f"  border: 1.5px solid rgba(98,126,234,0.45);"
-            f"  border-radius: 12px;"
-            f"  padding: 10px 20px;"
-            f"  font-size: 14px;"
-            f"  font-weight: 600;"
-            f"  text-align: left;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: rgba(98,126,234,0.20);"
-            f"  border-color: {COLORS['eth_blue']};"
-            f"}}"
-            f"QPushButton:pressed {{"
-            f"  background: rgba(98,126,234,0.28);"
-            f"}}"
-        )
+        self._btn_etherscan = QPushButton("⧉  Открыть в Etherscan")
+        self._btn_etherscan.setObjectName("secondaryBtn")
+        self._btn_etherscan.setMinimumHeight(40)
         self._btn_etherscan.clicked.connect(self._open_etherscan)
         layout.addWidget(self._btn_etherscan)
 
         info_grid = QGridLayout()
-        info_grid.setSpacing(12)
+        info_grid.setSpacing(10)
 
         nonce_card = self._make_info_card("Nonce", "—")
         self._nonce_display = nonce_card.findChild(QLabel, "infoValue")
@@ -576,15 +531,15 @@ class ColdVaultMainWindow(QMainWindow):
         tx_header = QHBoxLayout()
         tx_title = QLabel("История транзакций")
         tx_title.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;"
+            f"color: {COLORS['text_primary']}; font-size: 16px; font-weight: 700;"
         )
         tx_header.addWidget(tx_title)
         tx_header.addStretch()
 
-        btn_open_explorer = QPushButton("Обозреватель →")
+        btn_open_explorer = QPushButton("Etherscan →")
         btn_open_explorer.setStyleSheet(
-            f"color: {COLORS['accent']}; background: transparent; border: none;"
-            f" font-size: 13px; font-weight: 600; padding: 0;"
+            f"color: {COLORS['text_muted']}; background: transparent; border: none;"
+            f" font-size: 12px; font-weight: 600; padding: 0;"
         )
         btn_open_explorer.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_open_explorer.clicked.connect(self._open_etherscan)
@@ -592,7 +547,7 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addLayout(tx_header)
 
         filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
+        filter_row.setSpacing(6)
 
         self._chip_all = self._make_chip("Все", True)
         self._chip_in = self._make_chip("Входящие", False)
@@ -609,19 +564,19 @@ class ColdVaultMainWindow(QMainWindow):
 
         self._btn_refresh_txs = QPushButton("⟳")
         self._btn_refresh_txs.setObjectName("secondaryBtn")
-        self._btn_refresh_txs.setFixedSize(38, 34)
-        self._btn_refresh_txs.setToolTip("Обновить историю транзакций")
+        self._btn_refresh_txs.setFixedSize(36, 32)
+        self._btn_refresh_txs.setToolTip("Обновить историю")
         self._btn_refresh_txs.clicked.connect(self._load_tx_history)
         filter_row.addWidget(self._btn_refresh_txs)
 
         layout.addLayout(filter_row)
 
         self._tx_container = QVBoxLayout()
-        self._tx_container.setSpacing(8)
+        self._tx_container.setSpacing(6)
 
         self._tx_empty_lbl = QLabel("Нет транзакций. Подключите USB и обновите баланс.")
         self._tx_empty_lbl.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 13px; padding: 32px 0;"
+            f"color: {COLORS['text_muted']}; font-size: 13px; padding: 28px 0;"
         )
         self._tx_empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._tx_container.addWidget(self._tx_empty_lbl)
@@ -652,11 +607,8 @@ class ColdVaultMainWindow(QMainWindow):
             rub_dec = round((rub_val - rub_int) * 100)
             rub_int_fmt = f"{rub_int:,}".replace(",", " ")
             self._balance_rub_label.setText(f"{rub_int_fmt},{rub_dec:02d} ₽")
-
             price_fmt = f"{self._eth_price_rub:,.0f}".replace(",", " ")
-            self._market_price_label.setText(
-                f"Рыночная цена ETH · {price_fmt} ₽"
-            )
+            self._market_price_label.setText(f"ETH · {price_fmt} ₽")
         else:
             self._balance_rub_label.setText("— ₽")
             self._market_price_label.setText("Загрузка курса…")
@@ -668,14 +620,14 @@ class ColdVaultMainWindow(QMainWindow):
         btn.setCheckable(True)
         btn.setChecked(active)
         active_style = (
-            f"background: rgba(168,85,247,0.15); border: 1.5px solid rgba(168,85,247,0.5);"
-            f" color: {COLORS['accent']}; border-radius: 16px; padding: 5px 18px;"
-            f" font-size: 13px; font-weight: 600;"
+            f"background: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_focus']};"
+            f" color: {COLORS['text_primary']}; border-radius: 14px; padding: 4px 16px;"
+            f" font-size: 12px; font-weight: 600;"
         )
         inactive_style = (
-            f"background: {COLORS['bg_secondary']}; border: 1px solid {COLORS['border']};"
-            f" color: {COLORS['text_muted']}; border-radius: 16px; padding: 5px 18px;"
-            f" font-size: 13px; font-weight: 500;"
+            f"background: transparent; border: 1px solid {COLORS['border']};"
+            f" color: {COLORS['text_muted']}; border-radius: 14px; padding: 4px 16px;"
+            f" font-size: 12px; font-weight: 500;"
         )
         btn.setStyleSheet(active_style if active else inactive_style)
         btn._active_style = active_style
@@ -721,7 +673,7 @@ class ColdVaultMainWindow(QMainWindow):
                 "Нет транзакций. Подключите USB и обновите баланс."
             )
             lbl.setStyleSheet(
-                f"color: {COLORS['text_muted']}; font-size: 13px; padding: 32px 0;"
+                f"color: {COLORS['text_muted']}; font-size: 13px; padding: 28px 0;"
             )
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._tx_container.addWidget(lbl)
@@ -748,8 +700,8 @@ class ColdVaultMainWindow(QMainWindow):
         for date_label, group in groups.items():
             sep = QLabel(date_label.upper())
             sep.setStyleSheet(
-                f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 700;"
-                f" padding: 10px 0 4px; letter-spacing: 0.8px;"
+                f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 700;"
+                f" padding: 8px 0 3px; letter-spacing: 0.8px;"
             )
             self._tx_container.addWidget(sep)
             for tx in group:
@@ -797,12 +749,12 @@ class ColdVaultMainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setSpacing(6)
-        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(4)
+        card_layout.setContentsMargins(14, 12, 14, 12)
 
         t = QLabel(title)
         t.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px;"
+            f"color: {COLORS['text_muted']}; font-size: 10px;"
             f" font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;"
         )
         card_layout.addWidget(t)
@@ -810,7 +762,7 @@ class ColdVaultMainWindow(QMainWindow):
         v = QLabel(value)
         v.setObjectName("infoValue")
         v.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;"
+            f"color: {COLORS['text_primary']}; font-size: 16px; font-weight: 700;"
         )
         card_layout.addWidget(v)
 
@@ -821,8 +773,8 @@ class ColdVaultMainWindow(QMainWindow):
     def _build_receive_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(16)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(14)
 
         title = QLabel("Получить ETH")
         title.setObjectName("titleLabel")
@@ -833,22 +785,22 @@ class ColdVaultMainWindow(QMainWindow):
         layout.addWidget(subtitle)
 
         content = QHBoxLayout()
-        content.setSpacing(20)
+        content.setSpacing(16)
 
         gen_card = QFrame()
         gen_card.setObjectName("card")
         gen_layout = QVBoxLayout(gen_card)
-        gen_layout.setSpacing(12)
+        gen_layout.setSpacing(10)
 
         gen_title = QLabel("Генерация QR для получения")
-        gen_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 16px;")
+        gen_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 15px;")
         gen_layout.addWidget(gen_title)
 
         self._qr_image_label = QLabel()
-        self._qr_image_label.setFixedSize(250, 250)
+        self._qr_image_label.setFixedSize(240, 240)
         self._qr_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._qr_image_label.setStyleSheet(
-            f"background: white; border-radius: 8px; border: 1px solid {COLORS.get('border', '#333')};"
+            f"background: white; border-radius: 6px; border: 1px solid {COLORS['border']};"
         )
         self._qr_image_label.setText("Подключите\nUSB")
         gen_layout.addWidget(self._qr_image_label, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -860,12 +812,12 @@ class ColdVaultMainWindow(QMainWindow):
         self._qr_amount_input.setSpecialValueText("Любая сумма")
         gen_layout.addWidget(self._qr_amount_input)
 
-        btn_gen = QPushButton("⎙ Сгенерировать QR")
+        btn_gen = QPushButton("⎙  Сгенерировать QR")
         btn_gen.setObjectName("primaryBtn")
         btn_gen.clicked.connect(self._generate_qr)
         gen_layout.addWidget(btn_gen)
 
-        btn_save_qr = QPushButton("↓ Сохранить QR в PNG")
+        btn_save_qr = QPushButton("↓  Сохранить QR в PNG")
         btn_save_qr.setObjectName("secondaryBtn")
         btn_save_qr.clicked.connect(self._save_qr_image)
         gen_layout.addWidget(btn_save_qr)
@@ -876,10 +828,10 @@ class ColdVaultMainWindow(QMainWindow):
         scan_card = QFrame()
         scan_card.setObjectName("card")
         scan_layout = QVBoxLayout(scan_card)
-        scan_layout.setSpacing(12)
+        scan_layout.setSpacing(10)
 
         scan_title = QLabel("Сканировать входящий QR")
-        scan_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 16px;")
+        scan_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 700; font-size: 15px;")
         scan_layout.addWidget(scan_title)
 
         scan_hint = QLabel(
@@ -890,7 +842,7 @@ class ColdVaultMainWindow(QMainWindow):
         scan_hint.setWordWrap(True)
         scan_layout.addWidget(scan_hint)
 
-        btn_scan_file = QPushButton("📁 Загрузить изображение QR")
+        btn_scan_file = QPushButton("📁  Загрузить изображение QR")
         btn_scan_file.setObjectName("secondaryBtn")
         btn_scan_file.clicked.connect(self._scan_qr_from_file)
         scan_layout.addWidget(btn_scan_file)
@@ -900,7 +852,7 @@ class ColdVaultMainWindow(QMainWindow):
         self._qr_uri_input.setPlaceholderText("ethereum:0x... или 0x...")
         scan_layout.addWidget(self._qr_uri_input)
 
-        btn_parse = QPushButton("▶ Разобрать URI")
+        btn_parse = QPushButton("▶  Разобрать URI")
         btn_parse.setObjectName("primaryBtn")
         btn_parse.clicked.connect(self._parse_qr_uri)
         scan_layout.addWidget(btn_parse)
@@ -910,19 +862,19 @@ class ColdVaultMainWindow(QMainWindow):
         result_layout = QVBoxLayout(result_card)
 
         res_hdr = QLabel("Результат:")
-        res_hdr.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 600;")
+        res_hdr.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600;")
         result_layout.addWidget(res_hdr)
 
         self._qr_result_addr = QLabel("—")
-        self._qr_result_addr.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 14px; font-weight: 700;")
+        self._qr_result_addr.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
         self._qr_result_addr.setWordWrap(True)
         result_layout.addWidget(self._qr_result_addr)
 
         self._qr_result_amount = QLabel("")
-        self._qr_result_amount.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 13px;")
+        self._qr_result_amount.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         result_layout.addWidget(self._qr_result_amount)
 
-        btn_fill_send = QPushButton("↗ Заполнить форму Отправки")
+        btn_fill_send = QPushButton("↗  Заполнить форму Отправки")
         btn_fill_send.setObjectName("primaryBtn")
         btn_fill_send.clicked.connect(self._fill_send_from_qr)
         result_layout.addWidget(btn_fill_send)
@@ -955,7 +907,7 @@ class ColdVaultMainWindow(QMainWindow):
                 address=self._address,
                 amount_eth=amount,
                 chain_id=chain_id,
-                size=250,
+                size=240,
             )
             self._qr_pil_image = pil_img
             self._qr_image_label.setPixmap(_pil_to_pixmap(pil_img))
@@ -1011,7 +963,7 @@ class ColdVaultMainWindow(QMainWindow):
             self._amount_input.setValue(req.amount_eth)
         self._switch_page(1)
 
-    # ─── Send page ─── #
+    # ─── Send page (с кнопкой MAX) ─── #
 
     def _build_send_page(self) -> QWidget:
         page = QWidget()
@@ -1020,8 +972,8 @@ class ColdVaultMainWindow(QMainWindow):
         scroll.setWidget(page)
 
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(16)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(14)
 
         title = QLabel("Отправить ETH")
         title.setObjectName("titleLabel")
@@ -1034,14 +986,24 @@ class ColdVaultMainWindow(QMainWindow):
         form_card = QFrame()
         form_card.setObjectName("card")
         form_layout = QVBoxLayout(form_card)
-        form_layout.setSpacing(14)
+        form_layout.setSpacing(12)
 
         form_layout.addWidget(self._make_field_label("Адрес получателя"))
         self._to_input = QLineEdit()
         self._to_input.setPlaceholderText("0x...")
         form_layout.addWidget(self._to_input)
 
-        form_layout.addWidget(self._make_field_label("Сумма (ETH)"))
+        # Сумма + кнопка MAX
+        amount_label_row = QHBoxLayout()
+        amount_label_row.addWidget(self._make_field_label("Сумма (ETH)"))
+        amount_label_row.addStretch()
+        self._btn_max = QPushButton("MAX")
+        self._btn_max.setObjectName("maxBtn")
+        self._btn_max.setToolTip("Отправить весь баланс")
+        self._btn_max.clicked.connect(self._fill_max_amount)
+        amount_label_row.addWidget(self._btn_max)
+        form_layout.addLayout(amount_label_row)
+
         self._amount_input = QDoubleSpinBox()
         self._amount_input.setDecimals(8)
         self._amount_input.setMaximum(1000000)
@@ -1054,12 +1016,12 @@ class ColdVaultMainWindow(QMainWindow):
 
         gas_header = QHBoxLayout()
         gas_label = QLabel("Настройки Gas")
-        gas_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 600; font-size: 15px;")
+        gas_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 600; font-size: 14px;")
         gas_header.addWidget(gas_label)
 
         self._btn_fetch_gas = QPushButton("Получить текущий")
         self._btn_fetch_gas.setObjectName("secondaryBtn")
-        self._btn_fetch_gas.setFixedWidth(180)
+        self._btn_fetch_gas.setFixedWidth(160)
         self._btn_fetch_gas.clicked.connect(self._fetch_gas_prices)
         gas_header.addWidget(self._btn_fetch_gas)
         gas_layout.addLayout(gas_header)
@@ -1128,6 +1090,25 @@ class ColdVaultMainWindow(QMainWindow):
         wrapper_layout.addWidget(scroll)
         return wrapper
 
+    def _fill_max_amount(self):
+        """Заполняет поле суммы всем доступным балансом."""
+        try:
+            eth_val = float(self._balance_eth)
+        except (ValueError, TypeError):
+            eth_val = 0.0
+        if eth_val <= 0:
+            QMessageBox.information(self, "Нет баланса", "Баланс равен нулю или кошелёк не разблокирован.")
+            return
+        # Вычитаем примерную комиссию газа (21000 * 30 Gwei)
+        gas_limit = int(self._gas_limit_input.value())
+        if self._tx_type_combo.currentIndex() == 0:
+            fee_gwei = self._max_fee_input.value()
+        else:
+            fee_gwei = self._gas_price_input.value()
+        gas_fee_eth = (gas_limit * fee_gwei * 1e9) / 1e18
+        send_amount = max(0.0, eth_val - gas_fee_eth)
+        self._amount_input.setValue(send_amount)
+
     # ─── Sign page ─── #
 
     def _build_sign_page(self) -> QWidget:
@@ -1137,22 +1118,22 @@ class ColdVaultMainWindow(QMainWindow):
         scroll.setWidget(page)
 
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(20)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(18)
 
         title = QLabel("Транзакции")
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        pending_title = QLabel("⯊ ШАГ 1 — Подписать транзакцию (pending → signed)")
+        pending_title = QLabel("ШАГ 1 — Подписать транзакцию")
         pending_title.setStyleSheet(
-            f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; padding: 4px 0;"
+            f"color: {COLORS['text_primary']}; font-size: 14px; font-weight: 700; padding: 4px 0;"
         )
         layout.addWidget(pending_title)
 
         pending_hint = QLabel(
             "Сканируйте USB — найдутся неподписанные транзакции из pending/. "
-            "Выберите файл, введите пароль — подписанная TX сохранится в signed/."
+            "Выберите файл — подписанная TX сохранится в signed/."
         )
         pending_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         pending_hint.setWordWrap(True)
@@ -1166,25 +1147,25 @@ class ColdVaultMainWindow(QMainWindow):
         pending_card_layout.addLayout(self._pending_list_widget)
 
         self._no_pending_label = QLabel("Нет неподписанных транзакций на USB")
-        self._no_pending_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 20px;")
+        self._no_pending_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 18px;")
         self._no_pending_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pending_card_layout.addWidget(self._no_pending_label)
 
         layout.addWidget(pending_card)
 
-        btn_scan_pending = QPushButton("🔍 Сканировать pending/ на USB")
+        btn_scan_pending = QPushButton("Сканировать pending/ на USB")
         btn_scan_pending.setObjectName("primaryBtn")
         btn_scan_pending.clicked.connect(self._scan_pending_txs)
         layout.addWidget(btn_scan_pending)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setStyleSheet(f"color: {COLORS.get('border', '#333')};")
+        divider.setStyleSheet(f"background: {COLORS['border']}; max-height: 1px;")
         layout.addWidget(divider)
 
-        signed_title = QLabel("▶ ШАГ 2 — Отправить подписанную транзакцию в сеть")
+        signed_title = QLabel("ШАГ 2 — Отправить подписанную транзакцию в сеть")
         signed_title.setStyleSheet(
-            f"color: {COLORS.get('success', '#4caf50')}; font-size: 15px; font-weight: 700; padding: 4px 0;"
+            f"color: {COLORS['success']}; font-size: 14px; font-weight: 700; padding: 4px 0;"
         )
         layout.addWidget(signed_title)
 
@@ -1200,20 +1181,20 @@ class ColdVaultMainWindow(QMainWindow):
         signed_card_layout.addLayout(self._signed_list_widget)
 
         self._no_signed_label = QLabel("Нет подписанных транзакций на USB")
-        self._no_signed_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 20px;")
+        self._no_signed_label.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 18px;")
         self._no_signed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         signed_card_layout.addWidget(self._no_signed_label)
 
         layout.addWidget(signed_card)
 
-        btn_scan_signed = QPushButton("🔍 Сканировать signed/ на USB")
+        btn_scan_signed = QPushButton("Сканировать signed/ на USB")
         btn_scan_signed.setObjectName("secondaryBtn")
         btn_scan_signed.clicked.connect(self._scan_signed_txs)
         layout.addWidget(btn_scan_signed)
 
         self._broadcast_log = QTextEdit()
         self._broadcast_log.setReadOnly(True)
-        self._broadcast_log.setMaximumHeight(160)
+        self._broadcast_log.setMaximumHeight(150)
         self._broadcast_log.setPlaceholderText("Лог операций...")
         layout.addWidget(self._broadcast_log)
         layout.addStretch()
@@ -1224,7 +1205,7 @@ class ColdVaultMainWindow(QMainWindow):
         wrapper_layout.addWidget(scroll)
         return wrapper
 
-    # ─── Подпись pending TX ─── #
+    # ─── Подпись pending TX (FIX: краш устранён) ─── #
 
     def _scan_pending_txs(self):
         if not self._usb_connected:
@@ -1249,9 +1230,9 @@ class ColdVaultMainWindow(QMainWindow):
             name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
             row.addWidget(name_label)
 
-            btn_sign = QPushButton("✎ Подписать")
+            btn_sign = QPushButton("Подписать")
             btn_sign.setObjectName("primaryBtn")
-            btn_sign.setFixedWidth(160)
+            btn_sign.setFixedWidth(140)
             btn_sign.clicked.connect(lambda _, f=fname: self._sign_pending_tx(f))
             row.addWidget(btn_sign)
 
@@ -1260,14 +1241,18 @@ class ColdVaultMainWindow(QMainWindow):
             self._pending_list_widget.addWidget(w)
 
     def _sign_pending_tx(self, filename: str):
-        raw_key = self._km.private_key
-        if not raw_key:
-            QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
-            return
-
-        private_key: bytes = bytes(raw_key)
-
+        """
+        FIX: весь метод обёрнут в try/except чтобы исключение
+        не роняло приложение — вместо краша показываем диалог ошибки.
+        """
         try:
+            raw_key = self._km.private_key
+            if not raw_key:
+                QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
+                return
+
+            private_key: bytes = bytes(raw_key)
+
             tx_json = self._usb.read_pending_tx(filename)
             tx_data = json.loads(tx_json)
             tx_inner = tx_data.get("tx", tx_data)
@@ -1296,7 +1281,9 @@ class ColdVaultMainWindow(QMainWindow):
             path = self._usb.save_signed_tx(signed_hex, signed_filename)
             self._usb.delete_pending_tx(filename)
 
-            self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
+            if hasattr(self, '_broadcast_log'):
+                self._broadcast_log.append(f"[✓] Подписано: {signed_filename}")
+
             QMessageBox.information(
                 self, "Транзакция подписана",
                 f"Файл сохранён: {path}\n\n"
@@ -1307,9 +1294,15 @@ class ColdVaultMainWindow(QMainWindow):
 
         except Exception as e:
             tb = traceback.format_exc()
-            if hasattr(self, '_broadcast_log'):
-                self._broadcast_log.append(f"[!] Ошибка подписи:\n{tb}")
-            QMessageBox.critical(self, "Ошибка подписи", f"{e}\n\nПодробности:\n{tb}")
+            try:
+                if hasattr(self, '_broadcast_log'):
+                    self._broadcast_log.append(f"[!] Ошибка подписи:\n{tb}")
+                QMessageBox.critical(
+                    self, "Ошибка подписи",
+                    f"{e}\n\nПодробности:\n{tb[:600]}"
+                )
+            except Exception:
+                pass  # если и диалог упал — не допускаем краш
 
     # ─── Broadcast signed ─── #
 
@@ -1335,9 +1328,9 @@ class ColdVaultMainWindow(QMainWindow):
             name_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: 500;")
             row.addWidget(name_label)
 
-            btn_send = QPushButton("▶ Отправить в сеть")
+            btn_send = QPushButton("▶  Отправить в сеть")
             btn_send.setObjectName("primaryBtn")
-            btn_send.setFixedWidth(180)
+            btn_send.setFixedWidth(170)
             btn_send.clicked.connect(lambda _, f=fname: self._broadcast_signed(f))
             row.addWidget(btn_send)
 
@@ -1360,27 +1353,12 @@ class ColdVaultMainWindow(QMainWindow):
         except Exception as e:
             self._broadcast_log.append(f"[!] Ошибка: {e}")
 
-    # ─── Settings ─── #
-
-    def _build_settings_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(16)
-
-        title = QLabel("Настройки")
-        title.setObjectName("titleLabel")
-        layout.addWidget(title)
-
-        layout.addStretch()
-        return page
-
     # ─── Вспомогательные методы ─── #
 
     def _make_field_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 600;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600;"
         )
         return lbl
 
@@ -1390,7 +1368,6 @@ class ColdVaultMainWindow(QMainWindow):
             btn.setChecked(i == idx)
 
     def _detect_usb(self):
-        """Периодический опрос USB-накопителей (вызывается таймером каждые 3 с)."""
         try:
             drives = USBManager.detect_usb_drives()
             if drives:
@@ -1403,12 +1380,11 @@ class ColdVaultMainWindow(QMainWindow):
 
                 self._usb_status.setText(f"● USB: {drive_label}")
                 self._usb_status.setStyleSheet(
-                    f"color: {COLORS['success']}; font-size: 12px; padding: 4px 8px 16px;"
+                    f"color: {COLORS['success']}; font-size: 11px; padding: 2px 8px 14px;"
                 )
                 if self._usb_display:
                     self._usb_display.setText("Подкл.")
 
-                # Загружаем кошелёк только при первом обнаружении флешки
                 if not was_connected:
                     self._load_wallet_from_usb(drive_path)
             else:
@@ -1416,12 +1392,11 @@ class ColdVaultMainWindow(QMainWindow):
                 self._usb_connected = False
                 self._usb_status.setText("● USB отключён")
                 self._usb_status.setStyleSheet(
-                    f"color: {COLORS['error']}; font-size: 12px; padding: 4px 8px 16px;"
+                    f"color: {COLORS['error']}; font-size: 11px; padding: 2px 8px 14px;"
                 )
                 if self._usb_display:
                     self._usb_display.setText("Не подкл.")
 
-                # Сброс состояния кошелька при извлечении флешки
                 if was_connected:
                     self._address = None
                     self._address_label.setText("Подключите USB для начала работы")
@@ -1457,16 +1432,9 @@ class ColdVaultMainWindow(QMainWindow):
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Question)
         msg.setWindowTitle("USB не инициализирован")
-        msg.setText(
-            "На USB-накопителе не найден кошелёк.\n"
-            "Выберите действие:"
-        )
-        btn_create = msg.addButton(
-            "Создать новый кошелёк", QMessageBox.ButtonRole.AcceptRole
-        )
-        btn_import = msg.addButton(
-            "Импортировать из мнемоники", QMessageBox.ButtonRole.ActionRole
-        )
+        msg.setText("На USB-накопителе не найден кошелёк.\nВыберите действие:")
+        btn_create = msg.addButton("Создать новый кошелёк", QMessageBox.ButtonRole.AcceptRole)
+        btn_import = msg.addButton("Импортировать из мнемоники", QMessageBox.ButtonRole.ActionRole)
         msg.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
         msg.exec()
 
@@ -1478,8 +1446,7 @@ class ColdVaultMainWindow(QMainWindow):
 
     def _ask_new_password(self) -> Optional[str]:
         password, ok = QInputDialog.getText(
-            self,
-            "Пароль для кошелька",
+            self, "Пароль для кошелька",
             "Придумайте пароль для шифрования кошелька:",
             QLineEdit.EchoMode.Password,
         )
@@ -1487,8 +1454,7 @@ class ColdVaultMainWindow(QMainWindow):
             return None
 
         confirm, ok2 = QInputDialog.getText(
-            self,
-            "Подтверждение пароля",
+            self, "Подтверждение пароля",
             "Повторите пароль:",
             QLineEdit.EchoMode.Password,
         )
@@ -1496,9 +1462,7 @@ class ColdVaultMainWindow(QMainWindow):
             return None
 
         if password != confirm:
-            QMessageBox.warning(
-                self, "Ошибка", "Пароли не совпадают. Попробуйте снова."
-            )
+            QMessageBox.warning(self, "Ошибка", "Пароли не совпадают.")
             return None
 
         return password
@@ -1519,20 +1483,16 @@ class ColdVaultMainWindow(QMainWindow):
                 return
 
             mnemonic, address = self._km.generate_wallet()
-
             self._usb.initialize_usb()
             wallet_file = str(self._usb.wallet_file)
             self._km.encrypt_and_save(password, wallet_file)
 
             QMessageBox.information(
-                self,
-                "Мнемоническая фраза",
+                self, "Мнемоническая фраза",
                 "ВАЖНО! Запишите мнемоническую фразу и храните её\n"
-                "в надёжном месте. Она нужна для восстановления кошелька.\n"
-                "Никому не сообщайте её!\n\n"
+                "в надёжном месте. Никому не сообщайте её!\n\n"
                 f"{mnemonic}"
             )
-
             self._finish_wallet_setup(address)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка создания кошелька", str(e))
@@ -1540,31 +1500,26 @@ class ColdVaultMainWindow(QMainWindow):
     def _import_wallet_on_usb(self):
         try:
             mnemonic, ok = QInputDialog.getText(
-                self,
-                "Импорт кошелька",
+                self, "Импорт кошелька",
                 "Введите мнемоническую фразу (12 или 24 слова):",
             )
             if not ok or not mnemonic.strip():
                 return
 
             mnemonic = mnemonic.strip()
-
             password = self._ask_new_password()
             if password is None:
                 return
 
             address = self._km.import_from_mnemonic(mnemonic)
-
             self._usb.initialize_usb()
             wallet_file = str(self._usb.wallet_file)
             self._km.encrypt_and_save(password, wallet_file)
 
             QMessageBox.information(
-                self,
-                "Кошелёк импортирован",
+                self, "Кошелёк импортирован",
                 f"Кошелёк успешно импортирован.\nАдрес: {address}"
             )
-
             self._finish_wallet_setup(address)
         except ValueError as e:
             QMessageBox.warning(self, "Ошибка импорта", str(e))
@@ -1575,17 +1530,15 @@ class ColdVaultMainWindow(QMainWindow):
         for attempt in range(1, max_attempts + 1):
             hint = "" if attempt == 1 else f"  (попытка {attempt} из {max_attempts})"
             password, ok = QInputDialog.getText(
-                self,
-                "Разблокировка кошелька",
+                self, "Разблокировка кошелька",
                 f"Введите пароль для кошелька на USB:{hint}",
                 QLineEdit.EchoMode.Password,
             )
 
             if not ok or not password:
                 QMessageBox.information(
-                    self,
-                    "Кошелёк заблокирован",
-                    "Кошелёк не разблокирован. Подключите USB и перезапустите приложение."
+                    self, "Кошелёк заблокирован",
+                    "Кошелёк не разблокирован. Перезапустите приложение."
                 )
                 return None
 
@@ -1596,19 +1549,15 @@ class ColdVaultMainWindow(QMainWindow):
                 remaining = max_attempts - attempt
                 if remaining > 0:
                     QMessageBox.warning(
-                        self,
-                        "Неверный пароль",
+                        self, "Неверный пароль",
                         f"Неверный пароль. Осталось попыток: {remaining}."
                     )
                 else:
                     QMessageBox.critical(
-                        self,
-                        "Доступ заблокирован",
-                        "Превышено количество попыток ввода пароля.\n"
-                        "Перезапустите приложение и попробуйте снова."
+                        self, "Доступ заблокирован",
+                        "Превышено количество попыток.\nПерезапустите приложение."
                     )
                     return None
-
         return None
 
     def _refresh_balance(self):
@@ -1665,10 +1614,6 @@ class ColdVaultMainWindow(QMainWindow):
             self._legacy_widget.show()
 
     def _create_unsigned_tx(self):
-        """
-        Создаёт неподписанную транзакцию и сохраняет на USB.
-        Конвертирует ETH→Wei и Gwei→Wei перед передачей в TransactionRequest.
-        """
         if not self._address or not self._usb_connected:
             QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован или USB не подключён.")
             return
@@ -1695,7 +1640,6 @@ class ColdVaultMainWindow(QMainWindow):
                 max_priority_fee_per_gas = None
                 gas_price = int(self._gas_price_input.value() * 10**9)
 
-            # FIX: используем value= вместо value_wei= для совместимости с Rust TransactionRequest
             tx_req = TransactionRequest(
                 to=to,
                 value=value_wei,
@@ -1732,10 +1676,6 @@ class ColdVaultMainWindow(QMainWindow):
         )
 
     def _on_tx_sent(self, result: dict):
-        """
-        FIX: обработка реального статуса транзакции.
-        result = {tx_hash, status, block, gas_used, error}
-        """
         tx_hash = result.get("tx_hash", "")
         status = result.get("status")
         block = result.get("block")
@@ -1743,47 +1683,29 @@ class ColdVaultMainWindow(QMainWindow):
         error = result.get("error")
 
         if status == 1:
-            # Транзакция подтверждена в блокчейне
-            msg = (
-                f"Hash: {tx_hash}\n"
-                f"Блок: {block}\n"
-                f"Gas использован: {gas_used}\n\n"
-                f"Проверьте на Etherscan."
-            )
+            msg = f"Hash: {tx_hash}\nБлок: {block}\nGas использован: {gas_used}\n\nПроверьте на Etherscan."
             if hasattr(self, '_broadcast_log'):
                 self._broadcast_log.append(f"[✓] TX подтверждена в блоке {block}: {tx_hash}")
-            QMessageBox.information(self, "✓ Транзакция подтверждена", msg)
-
+            QMessageBox.information(self, "Транзакция подтверждена", msg)
         elif status == 0:
-            # TX попала в блок, но была reverted
             msg = (
-                f"Hash: {tx_hash}\n"
-                f"Блок: {block}\n\n"
-                f"Транзакция отклонена (revert). Возможные причины:\n"
-                f"• Недостаточно ETH на балансе\n"
-                f"• Неверный gas limit\n"
-                f"• Ошибка в логике контракта"
+                f"Hash: {tx_hash}\nБлок: {block}\n\n"
+                f"Транзакция отклонена (revert).\n"
+                f"• Недостаточно ETH\n• Неверный gas limit\n• Ошибка контракта"
             )
             if hasattr(self, '_broadcast_log'):
                 self._broadcast_log.append(f"[✗] TX reverted в блоке {block}: {tx_hash}")
-            QMessageBox.warning(self, "✗ Транзакция отклонена", msg)
-
+            QMessageBox.warning(self, "Транзакция отклонена", msg)
         else:
-            # status=None: таймаут или ошибка — TX в mempool, но не подтверждена
-            msg = (
-                f"Hash: {tx_hash}\n\n"
-                f"TX отправлена в сеть, но подтверждения нет (timeout 120с).\n"
-                f"Проверьте вручную на Etherscan.\n"
-            )
+            msg = f"Hash: {tx_hash}\n\nTX отправлена, подтверждения нет (timeout 120с).\nПроверьте на Etherscan."
             if error:
-                msg += f"\nДетали: {error}"
+                msg += f"\n\nДетали: {error}"
             if hasattr(self, '_broadcast_log'):
-                self._broadcast_log.append(f"[?] TX в mempool (нет подтверждения): {tx_hash}")
-            QMessageBox.warning(self, "⚠ Ожидание подтверждения", msg)
+                self._broadcast_log.append(f"[?] TX в mempool: {tx_hash}")
+            QMessageBox.warning(self, "Ожидание подтверждения", msg)
 
 
 def _pil_to_pixmap(pil_image) -> QPixmap:
-    """Конвертирует PIL Image в QPixmap."""
     import io
     buf = io.BytesIO()
     pil_image.save(buf, format="PNG")
