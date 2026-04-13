@@ -3,6 +3,9 @@ chcp 65001 >nul 2>&1
 title ColdVault ETH - Build EXE
 color 0A
 
+:: Add Rust to PATH (in case it was installed in current session)
+set PATH=%USERPROFILE%\.cargo\bin;%PATH%
+
 echo.
 echo  ========================================
 echo    ColdVault ETH - Automated EXE Build
