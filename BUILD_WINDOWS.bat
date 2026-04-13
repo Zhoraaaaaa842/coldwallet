@@ -3,9 +3,9 @@ chcp 65001 >nul 2>&1
 title ColdVault ETH - Build EXE
 color 0A
 
-:: Add Rust to PATH for all possible locations
-set PATH=C:\Users\%USERNAME%\.cargo\bin;%PATH%
-set PATH=C:\Users\yarch\.cargo\bin;%PATH%
+:: Add Rust to PATH
+set "PATH=C:\Users\yarch\.cargo\bin;%PATH%"
+set "PATH=C:\Users\%USERNAME%\.cargo\bin;%PATH%"
 
 echo.
 echo  ========================================
@@ -28,15 +28,10 @@ for /f "tokens=*" %%v in ('python --version') do echo [OK] %%v
 :: -------------------------------------------------------
 :: 2. Rust + Cargo
 :: -------------------------------------------------------
-where cargo >nul 2>&1
+cargo --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo.
-    echo [!] Rust not found. Install via rustup:
-    echo [!] https://rustup.rs
-    echo.
-    echo     Open download page? (Y/N)
-    set /p openrust="> "
-    if /i "%openrust%"=="Y" start https://rustup.rs
+    echo [!] Rust not found at C:\Users\%USERNAME%\.cargo\bin
+    echo [!] Install via https://rustup.rs then restart PC
     pause
     exit /b 1
 )
