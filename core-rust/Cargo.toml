@@ -15,11 +15,9 @@ pyo3 = { version = "0.21", features = ["extension-module"] }
 tiny-bip39 = "1"
 
 # HD деривация m/44'/60'/0'/0/0
-coins-bip32 = "0.9"
+coins-bip32 = "0.13"
 
 # Ethereum: адреса, ECDSA secp256k1
-# BUG FIX: добавлены features "ecdsa" + "arithmetic" нужные для
-# sign_prehash_recoverable и RecoveryId
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 
 # keccak256 для адресов и хешей транзакций
