@@ -7,6 +7,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm,
 };
+use bip39::{Language, Mnemonic, MnemonicType, Seed};
 use coins_bip32::{
     path::DerivationPath,
     prelude::*,
@@ -22,7 +23,6 @@ use pyo3::prelude::*;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tiny_bip39::{Language, Mnemonic, MnemonicType, Seed};
 use tiny_keccak::{Hasher, Keccak};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -178,7 +178,6 @@ impl PyKeyManager {
         let mut salt = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut salt);
 
-        // Генерируем nonce через AeadCore::generate_nonce — правильный способ для aes-gcm 0.10
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let nonce_bytes: [u8; 12] = nonce.into();
 
@@ -287,7 +286,6 @@ impl PyKeyManager {
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
 
-        // Собираем nonce из Vec<u8> через slice — совместимо с aes-gcm 0.10
         let nonce_arr: [u8; 12] = nonce_bytes.as_slice().try_into()
             .map_err(|_| VaultError::Logic("Nonce slice error".into()))?;
         let nonce = aes_gcm::Nonce::from(nonce_arr);

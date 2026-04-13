@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.21", features = ["extension-module"] }
 
 # BIP-39 мнемоника
-tiny-bip39 = "1"
+bip39 = "2"
 
 # HD деривация m/44'/60'/0'/0/0
 coins-bip32 = "0.13"
@@ -24,8 +24,6 @@ k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 
 # AES-256-GCM шифрование vault
-# aes-gcm 0.10 внутри использует generic-array 0.14 (deprecated from_slice)
-# Явно подтягиваем aes-gcm с патчем через crypto-common
 aes-gcm = "0.10"
 
 # PBKDF2-SHA256
