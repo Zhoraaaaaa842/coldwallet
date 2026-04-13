@@ -69,7 +69,8 @@ fn bytes_to_nonce(bytes: &[u8]) -> Nonce {
 pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
     let signing_key = SigningKey::from_slice(private_key_bytes)
         .map_err(|e| VaultError::Crypto(e.to_string()))?;
-    let public_key = PublicKey::from(&signing_key.verifying_key());
+    // verifying_key() возвращает VerifyingKey (не ссылку), From<&VerifyingKey> реализован
+    let public_key = PublicKey::from(signing_key.verifying_key());
     let encoded = public_key.to_encoded_point(false);
     let pub_bytes = &encoded.as_bytes()[1..];
     let mut keccak = Keccak::v256();
