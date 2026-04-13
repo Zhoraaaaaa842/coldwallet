@@ -31,6 +31,8 @@ reqwest = { version = "0.11", features = ["json", "blocking"] }
 chrono = "0.4"
 qrcode-generator = "4.1"
 tiny-keccak = { version = "2.0", features = ["sha3"] }
+uuid = { version = "1.0", features = ["v4"] }
+regex = "1.10"
 
 [features]
 default = ["custom-protocol"]

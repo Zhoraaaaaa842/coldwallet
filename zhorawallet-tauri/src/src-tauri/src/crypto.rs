@@ -7,19 +7,44 @@ use bip39::{Mnemonic, Language};
 use hex;
 use std::fs;
 use std::path::Path;
+use serde::{Deserialize, Serialize};
 
-const SALT: &[u8] = b"zhorawallet_salt_v1";
-const ITERATIONS: u32 = 600_000;
+const VAULT_VERSION: u8 = 2;
+const ITERATIONS: u32 = 1_000_000; // Increased from 600k for better security
+const SALT_SIZE: usize = 32;
 
-pub fn derive_key(password: &str) -> Result<Vec<u8>, String> {
+#[derive(Serialize, Deserialize)]
+struct VaultData {
+    version: u8,
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+    checksum: Vec<u8>,
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
     let mut key = vec![0u8; 32];
     pbkdf2_hmac::<Sha256>(
         password.as_bytes(),
-        SALT,
+        salt,
         ITERATIONS,
         &mut key,
     );
     Ok(key)
+}
+
+fn generate_salt() -> Vec<u8> {
+    use rand::RngCore;
+    let mut salt = vec![0u8; SALT_SIZE];
+    rand::thread_rng().fill_bytes(&mut salt);
+    salt
+}
+
+fn calculate_checksum(data: &[u8]) -> Vec<u8> {
+    use sha2::Digest;
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().to_vec()
 }
 
 pub fn derive_address_from_mnemonic(mnemonic: &str, _password: &str) -> Result<String, String> {
@@ -39,36 +64,53 @@ pub fn derive_address_from_mnemonic(mnemonic: &str, _password: &str) -> Result<S
 }
 
 pub fn encrypt_vault(mnemonic: &str, password: &str) -> Result<Vec<u8>, String> {
-    let key = derive_key(password)?;
+    let salt = generate_salt();
+    let key = derive_key(password, &salt)?;
     let key = GenericArray::from_slice(&key);
-    
+
     let cipher = Aes256Gcm::new(key);
     let nonce = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
-    
+
     let ciphertext = cipher.encrypt(&nonce, mnemonic.as_bytes().as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
-    
-    let mut result = nonce.to_vec();
-    result.extend_from_slice(&ciphertext);
-    
-    Ok(result)
+
+    let checksum = calculate_checksum(mnemonic.as_bytes());
+
+    let vault_data = VaultData {
+        version: VAULT_VERSION,
+        salt: salt.to_vec(),
+        nonce: nonce.to_vec(),
+        ciphertext,
+        checksum,
+    };
+
+    serde_json::to_vec(&vault_data)
+        .map_err(|e| format!("Failed to serialize vault: {}", e))
 }
 
 pub fn decrypt_vault(encrypted: &[u8], password: &str) -> Result<String, String> {
-    if encrypted.len() < 12 {
-        return Err("Invalid encrypted data".to_string());
+    let vault_data: VaultData = serde_json::from_slice(encrypted)
+        .map_err(|e| format!("Failed to parse vault: {}", e))?;
+
+    if vault_data.version != VAULT_VERSION {
+        return Err(format!("Unsupported vault version: {}", vault_data.version));
     }
-    
-    let key = derive_key(password)?;
+
+    let key = derive_key(password, &vault_data.salt)?;
     let key = GenericArray::from_slice(&key);
-    
+
     let cipher = Aes256Gcm::new(key);
-    let nonce = GenericArray::from_slice(&encrypted[..12]);
-    let ciphertext = &encrypted[12..];
-    
-    let plaintext = cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-    
+    let nonce = GenericArray::from_slice(&vault_data.nonce);
+
+    let plaintext = cipher.decrypt(nonce, vault_data.ciphertext.as_ref())
+        .map_err(|_| "Decryption failed: incorrect password or corrupted data".to_string())?;
+
+    // Verify checksum
+    let checksum = calculate_checksum(&plaintext);
+    if checksum != vault_data.checksum {
+        return Err("Data integrity check failed: vault may be corrupted".to_string());
+    }
+
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 

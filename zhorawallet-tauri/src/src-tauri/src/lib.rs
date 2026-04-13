@@ -3,6 +3,10 @@ mod crypto;
 mod usb;
 mod network;
 mod state;
+mod networks;
+mod address_book;
+mod transaction_cache;
+mod validation;
 
 use tauri::Manager;
 
@@ -28,6 +32,16 @@ pub fn run() {
             commands::save_qr_image,
             commands::decode_qr_from_image,
             commands::get_mnemonic,
+            commands::get_all_networks,
+            commands::get_current_network,
+            commands::switch_network,
+            commands::add_contact,
+            commands::update_contact,
+            commands::delete_contact,
+            commands::get_all_contacts,
+            commands::search_contacts,
+            commands::get_cached_transactions,
+            commands::get_balance_summary,
         ])
         .setup(|app| {
             // Initialize app state

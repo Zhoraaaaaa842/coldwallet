@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use crate::networks::Network;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
@@ -34,7 +35,7 @@ pub struct UsbTransaction {
 pub struct AppState {
     pub wallet: Mutex<WalletState>,
     pub usb_path: Mutex<Option<String>>,
-    pub rpc_url: Mutex<String>,
+    pub current_network: Mutex<Network>,
     pub price_cache: Mutex<f64>,
 }
 
@@ -43,7 +44,7 @@ impl Default for AppState {
         Self {
             wallet: Mutex::new(WalletState::default()),
             usb_path: Mutex::new(None),
-            rpc_url: Mutex::new("https://eth.llamarpc.com".to_string()),
+            current_network: Mutex::new(Network::ethereum_mainnet()),
             price_cache: Mutex::new(0.0),
         }
     }

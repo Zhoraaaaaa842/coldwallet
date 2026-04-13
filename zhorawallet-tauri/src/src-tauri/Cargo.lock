@@ -5807,6 +5807,7 @@ dependencies = [
  "pbkdf2",
  "qrcode-generator",
  "rand 0.8.5",
+ "regex",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
@@ -5816,6 +5817,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tiny-keccak",
+ "uuid",
 ]
 
 [[package]]
