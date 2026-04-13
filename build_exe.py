@@ -13,7 +13,6 @@ import subprocess
 import sys
 import os
 import time
-import threading
 
 R   = "\033[0m"
 B   = "\033[1m"
@@ -36,6 +35,35 @@ BANNER = f"""
 {C}{B}           ⧠  Ethereum Cold Wallet  ·  Build System  ⧠{R}
 {DIM}           ─────────────────────────────────────────────{R}
 """
+
+# ─── Принудительный выбор Python с нужными зависимостями ───────────────────
+PREFERRED_PYTHONS = [
+    r"C:\Users\yarch\AppData\Local\Programs\Python\Python312\python.exe",
+    r"C:\Users\yarch\AppData\Local\Programs\Python\Python311\python.exe",
+    r"C:\Users\yarch\AppData\Local\Programs\Python\Python310\python.exe",
+]
+
+def find_python_with_deps():
+    """Возвращает путь к Python, у которого установлены PIL и qrcode."""
+    candidates = PREFERRED_PYTHONS[:]
+    # Добавляем текущий Python как запасной вариант
+    if sys.executable not in candidates:
+        candidates.append(sys.executable)
+
+    for py in candidates:
+        if not os.path.isfile(py):
+            continue
+        try:
+            result = subprocess.run(
+                [py, "-c", "import PIL; import qrcode; import qrcode.image.pil; print('ok')"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and "ok" in result.stdout:
+                return py
+        except Exception:
+            continue
+    return None
+
 
 # Ключевые фразы из вывода PyInstaller → (процент, описание)
 PROGRESS_MAP = [
@@ -73,8 +101,18 @@ def build():
     clear()
     print(BANNER)
 
+    # ── Проверяем Python с зависимостями ──
+    python_exe = find_python_with_deps()
+    if python_exe is None:
+        print(f"{RD}{B}  [!] Не найден Python с установленными PIL и qrcode!{R}")
+        print(f"  Установите зависимости командой:")
+        print(f"  {Y}pip install qrcode[pil] Pillow{R}")
+        sys.exit(1)
+
+    print(f"  {G}✔{R} Используется Python: {B}{python_exe}{R}\n")
+
     cmd = [
-        sys.executable, "-m", "PyInstaller",
+        python_exe, "-m", "PyInstaller",
         "--name=ZhoraWallet",
         "--onefile",
         "--windowed",
@@ -119,19 +157,16 @@ def build():
         bufsize=1,
     )
 
-    pct      = 0
-    msg      = "Инициализация PyInstaller..."
-    start    = time.time()
+    pct       = 0
+    start     = time.time()
     log_lines = []
 
     for raw_line in proc.stdout:
         line = raw_line.strip()
         log_lines.append(line)
 
-        # Определяем процент по ключевым фразам
         for keyword, target_pct, label in PROGRESS_MAP:
             if keyword.lower() in line.lower() and target_pct > pct:
-                # Плавно догоняем до target_pct
                 for p in range(pct + 1, target_pct + 1):
                     elapsed = time.time() - start
                     sys.stdout.write(
@@ -142,17 +177,14 @@ def build():
                 elapsed = time.time() - start
                 print(f"\r  {render_bar(target_pct)}  {C}•{R} {label:<54} {DIM}{elapsed:.1f}s{R}")
                 pct = target_pct
-                msg = label
                 break
 
     proc.wait()
 
-    # Сохраняем лог
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("\n".join(log_lines))
 
     if proc.returncode == 0:
-        # Догоняем до 100%
         for p in range(pct + 1, 101):
             elapsed = time.time() - start
             sys.stdout.write(
@@ -178,7 +210,6 @@ def build():
 {RD}{B}  [!] Ошибка сборки! (returncode={proc.returncode}, {elapsed:.1f}s){R}
   {DIM}Подробности:{R} {B}build_log.txt{R}
 """)
-        # Покажем последние 20 строк лога
         tail = log_lines[-20:] if len(log_lines) >= 20 else log_lines
         print(f"{RD}── Последние строки лога ──{R}")
         for l in tail:
