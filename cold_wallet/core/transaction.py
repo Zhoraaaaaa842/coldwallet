@@ -21,6 +21,14 @@ from eth_account import Account
 from eth_account.datastructures import SignedTransaction
 
 
+def _to_hex(value: int) -> str:
+    """
+    Преобразует int в hex-строку для PyO3-полей U256/u64.
+    Rust-обёртки (coldvault_core) принимают числовые поля как строки "0x...".
+    """
+    return hex(value)
+
+
 @dataclass
 class TransactionRequest:
     """Данные транзакции (Python fallback + совместимость с Rust)."""
@@ -42,7 +50,6 @@ class TransactionRequest:
                  data: bytes = b"",
                  value_wei: Optional[int] = None, **kwargs):
         self.to = to
-        # Поддержка как value, так и value_wei (для совместимости с GUI и Rust)
         self.value = value_wei if value_wei is not None else value
         self.gas_limit = gas_limit
         self.nonce = nonce
@@ -56,22 +63,25 @@ class TransactionRequest:
         return "eip1559" if self.max_fee_per_gas is not None else "legacy"
 
     def to_rust(self):
-        """Конвертирует в Rust TransactionRequest (фильтрует value_wei и лишние поля)."""
+        """
+        Конвертирует в Rust TransactionRequest.
+        PyO3-поля U256/u64 принимают числа как hex-строки "0x...".
+        """
         if not _RUST_AVAILABLE:
             return self
         kwargs = {
             "to": self.to,
-            "value": self.value,
-            "gas_limit": self.gas_limit,
-            "nonce": self.nonce,
-            "chain_id": self.chain_id,
+            "value": _to_hex(self.value),
+            "gas_limit": _to_hex(self.gas_limit),
+            "nonce": _to_hex(self.nonce),
+            "chain_id": _to_hex(self.chain_id),
         }
         if self.max_fee_per_gas is not None:
-            kwargs["max_fee_per_gas"] = self.max_fee_per_gas
+            kwargs["max_fee_per_gas"] = _to_hex(self.max_fee_per_gas)
         if self.max_priority_fee_per_gas is not None:
-            kwargs["max_priority_fee_per_gas"] = self.max_priority_fee_per_gas
+            kwargs["max_priority_fee_per_gas"] = _to_hex(self.max_priority_fee_per_gas)
         if self.gas_price is not None:
-            kwargs["gas_price"] = self.gas_price
+            kwargs["gas_price"] = _to_hex(self.gas_price)
         if self.data:
             kwargs["data"] = self.data
         return _RustTransactionRequest(**kwargs)
