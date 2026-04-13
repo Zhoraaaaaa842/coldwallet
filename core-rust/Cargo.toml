@@ -8,43 +8,23 @@ name = "coldvault_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-# PyO3 биндинги
 pyo3 = { version = "0.21", features = ["extension-module"] }
 
-# BIP-39 мнемоника
-bip39 = "2"
+# BIP-39 мнемоника — фиксируем конкретную версию
+bip39 = "=2.0.0"
 
-# HD деривация m/44'/60'/0'/0/0
 coins-bip32 = "0.13"
-
-# Ethereum: адреса, ECDSA secp256k1
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
-
-# keccak256 для адресов и хешей транзакций
 tiny-keccak = { version = "2", features = ["keccak"] }
-
-# AES-256-GCM шифрование vault
 aes-gcm = "0.10"
-
-# PBKDF2-SHA256
 pbkdf2 = { version = "0.12", features = ["simple"] }
 hmac = "0.12"
 sha2 = "0.10"
-
-# Безопасное затирание памяти
 zeroize = { version = "1", features = ["derive", "zeroize_derive"] }
-
-# Случайные числа
 rand = "0.8"
-
-# RLP-кодирование для транзакций
 rlp = "0.5"
-
-# JSON для vault-файлов
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Hex-кодирование
 hex = "0.4"
 
 [dev-dependencies]

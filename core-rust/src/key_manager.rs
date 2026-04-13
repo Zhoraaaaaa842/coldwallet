@@ -7,7 +7,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm,
 };
-use bip39::Mnemonic;
+use bip39::{Language, Mnemonic};
 use coins_bip32::{
     path::DerivationPath,
     prelude::*,
@@ -20,7 +20,7 @@ use k256::{
 };
 use pbkdf2::pbkdf2;
 use pyo3::prelude::*;
-use rand::RngCore;
+use rand::{RngCore, thread_rng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tiny_keccak::{Hasher, Keccak};
@@ -103,9 +103,12 @@ fn derive_encryption_key(password: &[u8], salt: &[u8], iterations: u32) -> Zeroi
     key
 }
 
-/// Деривирует seed из bip39 v2 Mnemonic (без passphrase)
-fn mnemonic_to_seed(mnemonic: &Mnemonic) -> [u8; 64] {
-    mnemonic.to_seed("")
+/// Генерирует 24-словную мнемонику через 32 байта энтропии (bip39 v2.0 API)
+fn generate_mnemonic_24() -> Result<Mnemonic, VaultError> {
+    let mut entropy = [0u8; 32]; // 256 бит = 24 слова
+    thread_rng().fill_bytes(&mut entropy);
+    Mnemonic::from_entropy_in(Language::English, &entropy)
+        .map_err(|e| VaultError::Crypto(format!("Mnemonic: {e}")))
 }
 
 #[pyclass(name = "KeyManager")]
@@ -123,11 +126,10 @@ impl PyKeyManager {
     }
 
     pub fn generate_wallet(&mut self) -> PyResult<(String, String)> {
-        // bip39 v2: generate_in(language, word_count)
-        let mnemonic = Mnemonic::generate(24)
-            .map_err(|e| VaultError::Crypto(format!("Mnemonic generate: {e}")))?;
+        let mnemonic = generate_mnemonic_24()?;
         let mnemonic_str = mnemonic.to_string();
-        let seed = mnemonic_to_seed(&mnemonic);
+        // bip39 v2: to_seed("") возвращает [u8; 64]
+        let seed = mnemonic.to_seed("");
         let private_key_bytes = derive_eth_key_from_seed(&seed)?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
         self.wallet = Some(WalletData {
@@ -139,10 +141,10 @@ impl PyKeyManager {
     }
 
     pub fn import_from_mnemonic(&mut self, mnemonic_phrase: &str) -> PyResult<String> {
-        // bip39 v2: Mnemonic::parse(phrase) — автоопределяет язык
-        let mnemonic = Mnemonic::parse(mnemonic_phrase)
+        // bip39 v2.0: parse_in_normalized для английского
+        let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_phrase)
             .map_err(|e| VaultError::InvalidPassword(format!("Неверная мнемоника: {e}")))?;
-        let seed = mnemonic_to_seed(&mnemonic);
+        let seed = mnemonic.to_seed("");
         let private_key_bytes = derive_eth_key_from_seed(&seed)?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
         self.wallet = Some(WalletData {
@@ -184,7 +186,7 @@ impl PyKeyManager {
         }
 
         let mut salt = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut salt);
+        thread_rng().fill_bytes(&mut salt);
 
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let nonce_bytes: [u8; 12] = nonce.into();
