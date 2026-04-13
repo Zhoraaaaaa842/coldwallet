@@ -14,7 +14,7 @@ echo.
 :: -------------------------------------------------------
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [!] Python не найден. Установи Python 3.10+
+    echo [!] Python not found. Install Python 3.10+
     echo [!] https://python.org/downloads
     pause
     exit /b 1
@@ -27,10 +27,10 @@ for /f "tokens=*" %%v in ('python --version') do echo [OK] %%v
 where cargo >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
-    echo [!] Rust не найден. Установи через rustup:
+    echo [!] Rust not found. Install via rustup:
     echo [!] https://rustup.rs
     echo.
-    echo     Открыть страницу загрузки? (Y/N)
+    echo     Open download page? (Y/N)
     set /p openrust="> "
     if /i "%openrust%"=="Y" start https://rustup.rs
     pause
@@ -39,43 +39,43 @@ if %errorlevel% neq 0 (
 for /f "tokens=*" %%v in ('cargo --version') do echo [OK] %%v
 
 :: -------------------------------------------------------
-:: 3. Python-зависимости
+:: 3. Python dependencies
 :: -------------------------------------------------------
 echo.
-echo [*] Установка Python-зависимостей...
+echo [*] Installing Python dependencies...
 python -m pip install -r requirements.txt -q
 if %errorlevel% neq 0 (
-    echo [!] Ошибка установки requirements.txt
+    echo [!] Error installing requirements.txt
     pause
     exit /b 1
 )
 
 python -m pip install maturin pyinstaller qrcode[pil] Pillow opencv-python -q
 if %errorlevel% neq 0 (
-    echo [!] Ошибка установки maturin/pyinstaller
+    echo [!] Error installing maturin/pyinstaller
     pause
     exit /b 1
 )
-echo [OK] Зависимости установлены
+echo [OK] Dependencies installed
 
 :: -------------------------------------------------------
-:: 4. Сборка (Rust -> whl -> PyInstaller)
+:: 4. Build (Rust -> whl -> PyInstaller)
 :: -------------------------------------------------------
 echo.
-echo [*] Запуск build_all.py...
+echo [*] Running build_all.py...
 echo.
 
 python build_all.py %*
 if %errorlevel% neq 0 (
     echo.
-    echo [!] Сборка завершилась с ошибками. Проверь вывод выше.
+    echo [!] Build failed. Check output above.
     pause
     exit /b 1
 )
 
 echo.
 echo  ========================================
-echo    Готово! dist\ColdVault_Setup\
+echo    Done! dist\ColdVault_Setup\
 echo  ========================================
 echo.
 pause
