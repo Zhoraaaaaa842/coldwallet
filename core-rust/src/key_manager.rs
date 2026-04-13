@@ -7,7 +7,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm,
 };
-use bip39::{Language, Mnemonic, MnemonicType, Seed};
+use bip39::Mnemonic;
 use coins_bip32::{
     path::DerivationPath,
     prelude::*,
@@ -103,6 +103,11 @@ fn derive_encryption_key(password: &[u8], salt: &[u8], iterations: u32) -> Zeroi
     key
 }
 
+/// Деривирует seed из bip39 v2 Mnemonic (без passphrase)
+fn mnemonic_to_seed(mnemonic: &Mnemonic) -> [u8; 64] {
+    mnemonic.to_seed("")
+}
+
 #[pyclass(name = "KeyManager")]
 pub struct PyKeyManager {
     wallet: Option<WalletData>,
@@ -118,10 +123,12 @@ impl PyKeyManager {
     }
 
     pub fn generate_wallet(&mut self) -> PyResult<(String, String)> {
-        let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
-        let mnemonic_str = mnemonic.phrase().to_string();
-        let seed = Seed::new(&mnemonic, "");
-        let private_key_bytes = derive_eth_key_from_seed(seed.as_bytes())?;
+        // bip39 v2: generate_in(language, word_count)
+        let mnemonic = Mnemonic::generate(24)
+            .map_err(|e| VaultError::Crypto(format!("Mnemonic generate: {e}")))?;
+        let mnemonic_str = mnemonic.to_string();
+        let seed = mnemonic_to_seed(&mnemonic);
+        let private_key_bytes = derive_eth_key_from_seed(&seed)?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
         self.wallet = Some(WalletData {
             private_key: Zeroizing::new(private_key_bytes),
@@ -131,16 +138,17 @@ impl PyKeyManager {
         Ok((mnemonic_str, address))
     }
 
-    pub fn import_from_mnemonic(&mut self, mnemonic: &str) -> PyResult<String> {
-        let parsed = Mnemonic::from_phrase(mnemonic, Language::English)
+    pub fn import_from_mnemonic(&mut self, mnemonic_phrase: &str) -> PyResult<String> {
+        // bip39 v2: Mnemonic::parse(phrase) — автоопределяет язык
+        let mnemonic = Mnemonic::parse(mnemonic_phrase)
             .map_err(|e| VaultError::InvalidPassword(format!("Неверная мнемоника: {e}")))?;
-        let seed = Seed::new(&parsed, "");
-        let private_key_bytes = derive_eth_key_from_seed(seed.as_bytes())?;
+        let seed = mnemonic_to_seed(&mnemonic);
+        let private_key_bytes = derive_eth_key_from_seed(&seed)?;
         let address = derive_address(&private_key_bytes).map_err(PyErr::from)?;
         self.wallet = Some(WalletData {
             private_key: Zeroizing::new(private_key_bytes),
             address: address.clone(),
-            mnemonic: Some(Zeroizing::new(mnemonic.to_string())),
+            mnemonic: Some(Zeroizing::new(mnemonic_phrase.to_string())),
         });
         Ok(address)
     }
