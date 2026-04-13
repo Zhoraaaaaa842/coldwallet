@@ -1,7 +1,7 @@
 # ZhoraWallet — Холодный кошелёк Ethereum
 
-> Программный cold wallet с air-gapped подписью транзакций через USB.  
-> Крипто-ядро написано на **Rust (PyO3)** для безопасности памяти и производительности.
+> Десктопный cold wallet с air-gapped подписью транзакций через USB.
+> Построен на **Tauri 2.0 + Vue 3 + Rust** для максимальной безопасности и современного UI.
 
 ---
 
@@ -10,8 +10,8 @@
 ```
 ┌──────────────────┐     USB      ┌───────────────────┐
 │   Онлайн-ПК       │◄──────────►│   Офлайн-ПК         │
-│   ZhoraWallet     │  pending/   │   SignOffline.exe   │
-│                   │  signed/    │                     │
+│   ZhoraWallet     │  pending/   │   SignOffline       │
+│   (Tauri App)     │  signed/    │   (Tauri App)       │
 │  • Баланс         │             │  • Приватный ключ   │
 │  • Создание TX    │             │  • Подпись TX       │
 │  • Broadcast      │             │  • Мнемоника        │
@@ -24,27 +24,28 @@
 
 ## Стек технологий
 
-### Rust-ядро (`core-rust/`)
+### Frontend (`zhorawallet-tauri/`)
+
+| Компонент | Технология |
+|---|---|
+| UI Framework | Vue 3 + TypeScript |
+| Стили | TailwindCSS |
+| Сборка | Vite |
+| State Management | Pinia |
+| Роутинг | Vue Router |
+
+### Backend (Tauri Rust Core)
 
 | Компонент | Крейт |
 |---|---|
-| PyO3-биндинги | `pyo3 = "0.21"` |
-| BIP-39 мнемоника (24 слова) | `tiny-bip39` |
-| HD деривация `m/44'/60'/0'/0/0` | `coins-bip32` |
+| Tauri Desktop | `tauri = "2.0"` |
+| BIP-39 мнемоника (24 слова) | `bip39` |
 | ECDSA secp256k1, адреса | `k256` |
 | AES-256-GCM шифрование vault | `aes-gcm` |
 | PBKDF2-SHA256 (600 000 итераций) | `pbkdf2` |
-| Затирание секретов в памяти | `zeroize` |
-| RLP-кодирование транзакций | `rlp` |
-
-### Python GUI (`cold_wallet/`)
-
-| Компонент | Библиотека |
-|---|---|
-| Десктоп-GUI | PyQt6 |
-| Ethereum RPC | web3.py |
-| QR-коды | qrcode + Pillow |
-| Сборка EXE | PyInstaller |
+| Keccak-256 для адресов | `tiny-keccak` |
+| HTTP запросы (RPC) | `reqwest` |
+| QR-коды | `qrcode-generator` |
 
 ---
 
@@ -52,99 +53,60 @@
 
 ```
 coldwallet/
-├── core-rust/                  ← Rust-ядро (PyO3)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs              ← регистрация модуля coldvault_core
-│       ├── key_manager.rs      ← BIP-39, HD деривация, AES-GCM, PBKDF2
-│       ├── transaction.rs      ← EIP-1559 + Legacy подпись
-│       ├── usb_manager.rs      ← path traversal защита
-│       └── error.rs            ← VaultError → Python exceptions
+├── zhorawallet-tauri/            ← Tauri приложение (Vue 3 + Rust)
+│   ├── src/                      ← Frontend (Vue + TypeScript)
+│   │   ├── components/           ← Vue компоненты
+│   │   ├── views/                ← Страницы (Dashboard, Send, Receive...)
+│   │   ├── stores/               ← Pinia stores
+│   │   └── composables/          ← Vue composables
+│   ├── src-tauri/                ← Tauri Backend (Rust)
+│   │   ├── src/
+│   │   │   ├── commands.rs       ← Tauri команды (17 штук)
+│   │   │   ├── crypto.rs         ← Криптография (BIP-39, AES-GCM, signing)
+│   │   │   ├── network.rs        ← Ethereum RPC
+│   │   │   ├── usb.rs            ← USB детекция и файловые операции
+│   │   │   └── state.rs          ← AppState (состояние приложения)
+│   │   ├── Cargo.toml
+│   │   └── tauri.conf.json
+│   └── package.json
 │
-├── cold_wallet/
-│   ├── core/
-│   │   ├── key_manager.py      ← тонкая обёртка над Rust
-│   │   ├── transaction.py      ← тонкая обёртка над Rust
-│   │   └── eth_network.py      ← RPC, баланс, nonce, broadcast
-│   ├── storage/
-│   │   └── usb_manager.py
-│   └── gui/
+├── core-rust/                    ← Rust крипто-ядро (для справки)
+│   └── src/                      ← Полная реализация BIP-32/44, signing
 │
-├── installer/
-├── build_all.py
-└── requirements.txt
+├── .gitignore
+├── SECURITY_AUDIT.md
+└── CLEAN_HISTORY.md
 ```
 
 ---
 
 ## Быстрый старт
 
-### 1. Зависимости Python
+### Предварительные требования
+
+- **Rust**: https://www.rust-lang.org/tools/install
+- **Node.js**: https://nodejs.org/ (v18+)
+
+### 1. Установка зависимостей
 
 ```bash
-pip install -r requirements.txt
+cd zhorawallet-tauri
+npm install
 ```
 
-### 2. Сборка Rust-ядра
+### 2. Запуск в режиме разработки
 
 ```bash
-# Установить Rust (если нет)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Установить maturin
-pip install maturin
-
-# Собрать и установить модуль
-cd core-rust
-maturin develop          # для разработки (debug)
-# или
-maturin build --release  # production .whl
-pip install ../target/wheels/coldvault_core-*.whl --force-reinstall
+npm run tauri dev
 ```
 
-### 3. Проверить сборку
+### 3. Сборка приложения
 
 ```bash
-python -c "from coldvault_core import KeyManager; km = KeyManager(); print(km.generate_wallet())"
+npm run tauri build
 ```
 
-### 4. Запуск приложения
-
-```bash
-python run_desktop.py
-```
-
-### 5. Сборка EXE
-
-```bash
-python build_all.py
-```
-
-| Флаг | Что собирает |
-|---|---|
-| `--desktop-only` | Только `ZhoraWallet.exe` |
-| `--signer-only` | Только `SignOffline.exe` |
-| `--installer-only` | Только `ZhoraUSB.exe` |
-| `--no-clean` | Не удалять предыдущую сборку |
-
----
-
-## Установка кошелька на USB
-
-**Вариант A — через `ZhoraUSB.exe`**
-
-1. Запустите `ZhoraUSB.exe` от имени администратора
-2. Выберите флешку из списка
-3. Нажмите **«Установить на флешку»** — подтвердите диалог
-4. `SignOffline.exe` автоматически скопируется на флешку
-
-**Вариант B — командная строка**
-
-```bash
-python installer/install_to_usb.py
-```
-
-> ❗ Запускайте `SignOffline.exe` только на **офлайн-ПК**.
+Собранные файлы появятся в `zhorawallet-tauri/src-tauri/target/release/bundle/`
 
 ---
 
@@ -157,7 +119,7 @@ python installer/install_to_usb.py
 
 1. **ZhoraWallet** → вкладка «Отправить» → заполни адрес, сумму, gas → **«Создать TX → USB»**
 2. Вставь USB в офлайн-ПК
-3. **SignOffline.exe** → сканировать `pending/` → ввести пароль → подписать
+3. **ZhoraWallet (офлайн)** → сканировать `pending/` → ввести пароль → подписать
 4. Вставь USB обратно в онлайн-ПК
 5. **ZhoraWallet** → сканировать `signed/` → **«Отправить в сеть»**
 
@@ -169,9 +131,7 @@ python installer/install_to_usb.py
 |---|---|
 | Шифрование vault | AES-256-GCM |
 | Деривация пароля | PBKDF2-SHA256, 600 000 итераций |
-| Хранение ключей | `Zeroizing<Vec<u8>>` + `ZeroizeOnDrop` |
-| Защита от брутфорса | Блокировка после 5 неверных паролей |
-| Мнемоника | BIP-39, 24 слова, 256 бит |
+| Хранение ключей | BIP-39 мнемоника (24 слова) |
 | HD деривация | BIP-44 `m/44'/60'/0'/0/0` |
 | Транзакции | EIP-1559 + Legacy, ECDSA secp256k1 |
 | Path traversal (USB) | Canonicalize + prefix-check |
@@ -179,9 +139,9 @@ python installer/install_to_usb.py
 
 ### Главные правила
 
-- `SignOffline.exe` запускать **только на офлайн-ПК без интернета**
-- Мнемонику (24 слова) хранить **на бумаге**, отдельно от флешки
-- Флешка на онлайн-ПК — только для переноса `pending/` и `signed/`
+- Запускать приложение на офлайн-ПК **только без интернета**
+- Мнемонику (24 слова) хранить **на бумаге**, отдельно от USB
+- USB-носитель — только для переноса `pending/` и `signed/`
 
 Полный аудит: [SECURITY_AUDIT.md](SECURITY_AUDIT.md)
 
@@ -191,8 +151,6 @@ python installer/install_to_usb.py
 
 ```
 USB/
-├── SignOffline.exe
-├── launch_signer.bat
 └── ColdVault/
     ├── wallet.vault       ← зашифрованный кошелёк (AES-256-GCM)
     ├── config.json        ← chain_id, сеть
@@ -210,5 +168,5 @@ USB/
 
 ---
 
-> ⚠️ Это **программный** холодный кошелёк. Не заменяет аппаратные решения (Ledger, Trezor).  
+> ⚠️ Это **программный** холодный кошелёк. Не заменяет аппаратные решения (Ledger, Trezor).
 > Используйте для обучения и умеренных сумм.

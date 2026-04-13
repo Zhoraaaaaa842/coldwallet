@@ -1,28 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.pyc
-
-# Virtual environments
-venv/
-.venv/
-env/
-.env/
-
-# PyInstaller build artifacts
-build/
-dist/
-*.spec.bak
-*.egg-info/
-
 # Sensitive files — NEVER commit
 *.vault
 wallet.vault
 *.key
 *.pem
 secrets.json
+*.env
+.env.local
 
 # OS files
 .DS_Store
@@ -39,17 +22,19 @@ desktop.ini
 *.log
 logs/
 
-# Test artifacts
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Rust/Tauri
+# Tauri / Rust
 zhorawallet-tauri/src/src-tauri/target/
 **/target/
-node_modules/
+**/*.dll
+**/*.exe
+
+# Node.js
+zhorawallet-tauri/node_modules/
+zhorawallet-tauri/dist/
+
+# Tauri build outputs
+zhorawallet-tauri/src/src-tauri/target/release/bundle/
 
 # Claude/AI tools
 .claude/
 .qwen/
-claude_free.bat
