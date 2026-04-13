@@ -142,7 +142,7 @@ def build():
         "--hidden-import=PyQt6.QtWidgets",
         "--hidden-import=PyQt6.QtCore",
         "--hidden-import=PyQt6.QtGui",
-        # QR + Pillow — все субмодули явно
+        # QR + Pillow — все субмодули явно + сбор бинарных .dll/.pyd
         "--hidden-import=qrcode",
         "--hidden-import=qrcode.main",
         "--hidden-import=qrcode.constants",
@@ -152,9 +152,12 @@ def build():
         "--hidden-import=PIL",
         "--hidden-import=PIL.Image",
         "--hidden-import=PIL.ImageDraw",
+        "--hidden-import=PIL.ImageFont",
+        "--hidden-import=PIL.ImageOps",
+        "--hidden-import=PIL.ImageFilter",
         "--collect-submodules=qrcode",
-        "--collect-submodules=PIL",
-        "--collect-data=qrcode",
+        "--collect-all=PIL",       # FIX: собирает .pyd/.dll + данные Pillow
+        "--collect-all=qrcode",    # FIX: был только collect-submodules, добавляем data
         # OpenCV
         "--hidden-import=cv2",
         "--hidden-import=numpy",
