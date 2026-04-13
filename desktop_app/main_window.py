@@ -45,6 +45,29 @@ from desktop_app.styles import (
 )
 
 
+def _get_private_key_bytes(km: KeyManager) -> Optional[bytes]:
+    """
+    Совместимость Rust (coldvault_core.KeyManager) и Python fallback.
+    Rust-версия не имеет @property private_key — только get_private_key().
+    Python fallback имеет оба варианта.
+    """
+    # Сначала пробуем метод (поддерживается обеими реализациями)
+    try:
+        raw = km.get_private_key()
+        if raw:
+            return bytes(raw)
+    except Exception:
+        pass
+    # Fallback на property (только Python-реализация)
+    try:
+        raw = km.private_key
+        if raw:
+            return bytes(raw)
+    except AttributeError:
+        pass
+    return None
+
+
 # ─── Поток получения цены ETH в рублях (CoinGecko) ─── #
 
 class PriceWorker(QThread):
@@ -1091,7 +1114,7 @@ class ColdVaultMainWindow(QMainWindow):
         return wrapper
 
     def _fill_max_amount(self):
-        """Заполняет поле суммы всем доступным балансом."""
+        """Заполняет поле суммы всем доступным балансом за вычетом комиссии."""
         try:
             eth_val = float(self._balance_eth)
         except (ValueError, TypeError):
@@ -1099,7 +1122,6 @@ class ColdVaultMainWindow(QMainWindow):
         if eth_val <= 0:
             QMessageBox.information(self, "Нет баланса", "Баланс равен нулю или кошелёк не разблокирован.")
             return
-        # Вычитаем примерную комиссию газа (21000 * 30 Gwei)
         gas_limit = int(self._gas_limit_input.value())
         if self._tx_type_combo.currentIndex() == 0:
             fee_gwei = self._max_fee_input.value()
@@ -1205,7 +1227,7 @@ class ColdVaultMainWindow(QMainWindow):
         wrapper_layout.addWidget(scroll)
         return wrapper
 
-    # ─── Подпись pending TX (FIX: краш устранён) ─── #
+    # ─── Подпись pending TX ─── #
 
     def _scan_pending_txs(self):
         if not self._usb_connected:
@@ -1242,16 +1264,15 @@ class ColdVaultMainWindow(QMainWindow):
 
     def _sign_pending_tx(self, filename: str):
         """
-        FIX: весь метод обёрнут в try/except чтобы исключение
-        не роняло приложение — вместо краша показываем диалог ошибки.
+        FIX: использует _get_private_key_bytes() для совместимости
+        Rust (coldvault_core) и Python fallback KeyManager.
+        Rust не имеет @property private_key — только get_private_key().
         """
         try:
-            raw_key = self._km.private_key
-            if not raw_key:
+            private_key = _get_private_key_bytes(self._km)
+            if not private_key:
                 QMessageBox.warning(self, "Ошибка", "Кошелёк не разблокирован. Подключите USB.")
                 return
-
-            private_key: bytes = bytes(raw_key)
 
             tx_json = self._usb.read_pending_tx(filename)
             tx_data = json.loads(tx_json)
@@ -1302,7 +1323,7 @@ class ColdVaultMainWindow(QMainWindow):
                     f"{e}\n\nПодробности:\n{tb[:600]}"
                 )
             except Exception:
-                pass  # если и диалог упал — не допускаем краш
+                pass
 
     # ─── Broadcast signed ─── #
 
