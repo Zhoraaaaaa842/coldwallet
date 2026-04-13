@@ -6,36 +6,13 @@ ZhoraWallet ETH — Python-обёртка над Rust KeyManager.
 """
 
 try:
-    # Пытаемся импортировать Rust-реализацию
-    from coldvault_core import KeyManager as _RustKeyManager  # type: ignore
+    # PyO3-классы не поддерживают наследование — просто переэкспортируем
+    from coldvault_core import KeyManager  # type: ignore
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
 
-if _RUST_AVAILABLE:
-    # --- Rust-реализация: просто переэкспортируем класс ---
-
-    class KeyManager(_RustKeyManager):  # type: ignore[misc]
-        """
-        Тонкая обёртка над Rust KeyManager из coldvault_core.
-
-        Все методы делегируются в Rust:
-          - generate_wallet() -> (mnemonic: str, address: str)
-          - import_from_mnemonic(mnemonic: str) -> str
-          - import_from_private_key(hex: str) -> str
-          - encrypt_and_save(password: str, filepath: str) -> None
-          - decrypt_and_load(password: str, filepath: str) -> str
-          - get_private_key() -> bytes
-          - clear() -> None
-
-        Свойства:
-          - address: str | None
-          - mnemonic: str | None
-          - remaining_attempts: int
-        """
-        pass
-
-else:
+if not _RUST_AVAILABLE:
     # --- Fallback Python-реализация (для среды без Rust) ---
     import os
     import json
@@ -199,7 +176,6 @@ else:
 
         @property
         def private_key(self) -> Optional[bytes]:
-            """Свойство для совместимости с GUI (main_window.py обращается к km.private_key)."""
             return self._private_key
 
         def get_private_key(self) -> bytes:
