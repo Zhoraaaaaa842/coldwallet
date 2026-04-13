@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(npm create *)",
+      "Bash(mkdir *)",
+      "Bash(npm init *)",
+      "Bash(npm install)",
+      "Bash(npm run *)",
+      "Bash(tasklist)",
+      "Bash(findstr *)",
+      "Bash(dir *)",
+      "Bash(move *)",
+      "Bash(taskkill *)",
+      "Bash(echo.)",
+      "Bash(pip install *)",
+      "Bash(npx *)",
+      "Bash(netstat *)"
+    ]
+  },
+  "$version": 3
+}

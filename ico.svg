@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+    <defs>
+        <!-- Градиент фона иконки -->
+        <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#0F1722" />
+            <stop offset="100%" stop-color="#060A10" />
+        </linearGradient>
+
+        <!-- Градиент центрального щита-хранилища -->
+        <linearGradient id="vaultGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#1A273A" />
+            <stop offset="100%" stop-color="#0C131D" />
+        </linearGradient>
+
+        <!-- Фирменный ледяной градиент для "Z" -->
+        <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00F2FE" />
+            <stop offset="100%" stop-color="#4FACFE" />
+        </linearGradient>
+
+        <!-- Фильтр для неонового свечения -->
+        <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur1" />
+            <feGaussianBlur in="SourceGraphic" stdDeviation="20" result="blur2" />
+            <feMerge>
+                <feMergeNode in="blur2" />
+                <feMergeNode in="blur1" />
+                <feMergeNode in="SourceGraphic" />
+            </feMerge>
+        </filter>
+
+        <!-- Тень для центрального хранилища -->
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#000000" flood-opacity="0.8" />
+        </filter>
+
+        <!-- Маска для закругления углов по стандарту иконок -->
+        <clipPath id="appIconClip">
+            <rect width="512" height="512" rx="115" />
+        </clipPath>
+    </defs>
+
+    <!-- Основной фон иконки (скругленный квадрат) -->
+    <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+
+    <!-- Внутреннее содержимое, обрезанное по маске -->
+    <g clip-path="url(#appIconClip)">
+        
+        <!-- Фоновые кольца безопасности (радар/блокчейн) -->
+        <circle cx="256" cy="256" r="180" fill="none" stroke="#142133" stroke-width="2" stroke-dasharray="8 12" />
+        <circle cx="256" cy="256" r="230" fill="none" stroke="#0C1624" stroke-width="6" />
+
+        <!-- Центральный шестиугольник (Хранилище / Сейф) -->
+        <polygon points="256,96 396,176 396,336 256,416 116,336 116,176" 
+                 fill="url(#vaultGrad)" 
+                 stroke="#233550" 
+                 stroke-width="4" 
+                 filter="url(#dropShadow)" />
+
+        <!-- ==================== БУКВА "Z" (МОНОЛИТНАЯ) ==================== -->
+        
+        <!-- Неоновое свечение (широкий цветной контур) -->
+        <g filter="url(#neonGlow)">
+            <path d="M 170 180 L 342 180 L 170 332 L 342 332" 
+                  fill="none" 
+                  stroke="url(#cyanGrad)" 
+                  stroke-width="34" 
+                  stroke-linecap="round" 
+                  stroke-linejoin="round" />
+        </g>
+
+        <!-- Внутренний яркий блик (эффект светящейся трубки / сердцевины) -->
+        <path d="M 170 180 L 342 180 L 170 332 L 342 332" 
+              fill="none" 
+              stroke="#FFFFFF" 
+              stroke-width="8" 
+              stroke-linecap="round" 
+              stroke-linejoin="round" 
+              opacity="0.8" />
+
+        <!-- Винты по углам корпуса (отсылка к "железному" кошельку) -->
+        <circle cx="65" cy="65" r="8" fill="#0A111A" stroke="#1A2D4A" stroke-width="3" />
+        <circle cx="447" cy="65" r="8" fill="#0A111A" stroke="#1A2D4A" stroke-width="3" />
+        <circle cx="65" cy="447" r="8" fill="#0A111A" stroke="#1A2D4A" stroke-width="3" />
+        <circle cx="447" cy="447" r="8" fill="#0A111A" stroke="#1A2D4A" stroke-width="3" />
+
+        <!-- Индикатор аппаратного кошелька (точка сверху) -->
+        <circle cx="256" cy="130" r="5" fill="#00F2FE" filter="url(#neonGlow)">
+            <animate attributeName="opacity" values="1;0.3;1" dur="2.5s" repeatCount="indefinite" />
+        </circle>
+
+        <!-- Глянцевый стеклянный блик поверх всей иконки (эффект Apple/Premium) -->
+        <polygon points="0,0 512,0 512,256 0,100" fill="#FFFFFF" opacity="0.03" style="pointer-events: none;" />
+    </g>
+    
+    <!-- Внешняя тонкая рамка для контраста -->
+    <rect width="512" height="512" rx="115" fill="none" stroke="#2A3D59" stroke-width="2" />
+</svg>

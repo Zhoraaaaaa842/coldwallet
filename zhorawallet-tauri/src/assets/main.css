@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Segoe UI', 'Inter', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  background-color: #0F0F13;
+  color: #FFFFFF;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #17171C;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2A35;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6B7280;
+}
+
+/* Global button styles */
+.btn-primary {
+  @apply bg-accent hover:bg-accent-hover active:bg-accent-dark text-white font-semibold px-6 py-3 rounded-xl transition-colors duration-200;
+}
+
+.btn-secondary {
+  @apply bg-bg-tertiary hover:bg-bg-hover text-white font-medium px-4 py-2 rounded-xl transition-colors duration-200;
+}
+
+/* Card styles */
+.card {
+  @apply bg-bg-secondary rounded-2xl border border-border p-6;
+}
+
+.card-balance {
+  background: linear-gradient(135deg, #1A1033 0%, #1C1040 50%, #0F0F13 100%);
+  @apply rounded-2xl border border-border p-6;
+}
+
+/* Input styles */
+.input-field {
+  @apply w-full bg-bg-tertiary border border-border rounded-xl px-4 py-3 text-white placeholder-text-muted focus:outline-none focus:border-border-focus transition-colors duration-200;
+}
+
+/* Address/monospace text */
+.mono-text {
+  @apply font-mono text-sm;
+}
