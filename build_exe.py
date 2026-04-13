@@ -111,6 +111,10 @@ def build():
 
     print(f"  {G}✔{R} Используется Python: {B}{python_exe}{R}\n")
 
+    # Путь к runtime hook (принудительный импорт PIL/qrcode)
+    hook_dir = os.path.dirname(os.path.abspath(__file__))
+    runtime_hook = os.path.join(hook_dir, "pyinstaller_hooks", "runtime_hook.py")
+
     cmd = [
         python_exe, "-m", "PyInstaller",
         "--name=ZhoraWallet",
@@ -118,6 +122,9 @@ def build():
         "--windowed",
         "--add-data", f"cold_wallet{os.pathsep}cold_wallet",
         "--add-data", f"desktop_app{os.pathsep}desktop_app",
+        # Runtime hook — гарантирует загрузку PIL и qrcode в бандле
+        f"--runtime-hook={runtime_hook}",
+        # Ethereum
         "--hidden-import=eth_account",
         "--hidden-import=web3",
         "--hidden-import=mnemonic",
@@ -128,16 +135,25 @@ def build():
         "--hidden-import=eth_utils",
         "--hidden-import=eth_rlp",
         "--hidden-import=cytoolz",
+        # GUI
         "--hidden-import=PyQt6",
         "--hidden-import=PyQt6.QtWidgets",
         "--hidden-import=PyQt6.QtCore",
         "--hidden-import=PyQt6.QtGui",
+        # QR + Pillow — все субмодули явно
         "--hidden-import=qrcode",
+        "--hidden-import=qrcode.main",
+        "--hidden-import=qrcode.constants",
+        "--hidden-import=qrcode.image",
+        "--hidden-import=qrcode.image.base",
         "--hidden-import=qrcode.image.pil",
         "--hidden-import=PIL",
         "--hidden-import=PIL.Image",
-        "--collect-all=qrcode",
-        "--collect-all=PIL",
+        "--hidden-import=PIL.ImageDraw",
+        "--collect-submodules=qrcode",
+        "--collect-submodules=PIL",
+        "--collect-data=qrcode",
+        # OpenCV
         "--hidden-import=cv2",
         "--hidden-import=numpy",
         "--collect-all=cv2",
