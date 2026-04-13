@@ -15,6 +15,8 @@ if not os.path.isfile(os.path.join(PROJECT_ROOT, 'run_desktop.py')):
     if not os.path.isfile(os.path.join(PROJECT_ROOT, 'run_desktop.py')):
         PROJECT_ROOT = os.getcwd()
 
+RUNTIME_HOOK = os.path.join(PROJECT_ROOT, 'pyinstaller_hooks', 'runtime_hook.py')
+
 block_cipher = None
 
 a = Analysis(
@@ -26,6 +28,7 @@ a = Analysis(
         (os.path.join(PROJECT_ROOT, 'desktop_app'), 'desktop_app'),
     ],
     hiddenimports=[
+        # Ethereum
         'eth_account',
         'eth_account._utils',
         'eth_account._utils.signing',
@@ -67,11 +70,29 @@ a = Analysis(
         'cryptography.hazmat.primitives.hashes',
         'cryptography.hazmat.backends',
         'mnemonic',
+        # GUI
         'PyQt6',
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         'PyQt6.sip',
+        # QR + Pillow
+        'qrcode',
+        'qrcode.main',
+        'qrcode.constants',
+        'qrcode.image',
+        'qrcode.image.base',
+        'qrcode.image.pil',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'PIL.ImageFont',
+        'PIL.ImageOps',
+        'PIL.ImageFilter',
+        # OpenCV
+        'cv2',
+        'numpy',
+        # stdlib
         'json',
         'decimal',
         'pathlib',
@@ -80,18 +101,20 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[RUNTIME_HOOK],
     excludes=[
         'tkinter',
         'matplotlib',
-        'numpy',
         'pandas',
         'scipy',
-        'PIL',
-        'cv2',
         'tensorflow',
         'torch',
         'pytest',
+    ],
+    collect_all=[
+        'PIL',
+        'qrcode',
+        'cv2',
     ],
     noarchive=False,
     optimize=0,
