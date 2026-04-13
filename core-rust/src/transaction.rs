@@ -1,7 +1,6 @@
 //! Подпись ETH-транзакций: EIP-1559 и Legacy.
 
 use k256::ecdsa::{RecoveryId, SigningKey};
-use k256::ecdsa::signature::hazmat::PrehashSigner;
 use pyo3::prelude::*;
 use rlp::RlpStream;
 use tiny_keccak::{Hasher, Keccak};
@@ -45,15 +44,11 @@ impl PyTransactionRequest {
         if self.max_fee_per_gas.is_some() { "eip1559" } else { "legacy" }
     }
 
-    // FIX: валидация данных транзакции из Python перед подписью
     pub fn validate(&self) -> PyResult<()> {
-        // Адрес должен быть 20 байт
         decode_address(&self.to)?;
-        // Gas limit не может быть нулём
         if self.gas_limit == 0 {
             return Err(VaultError::InvalidPassword("неверный gas_limit".into()).into());
         }
-        // EIP-1559: оба поля должны быть при наличии одного
         if self.max_fee_per_gas.is_some() && self.max_priority_fee_per_gas.is_none() {
             return Err(VaultError::InvalidPassword(
                 "при EIP-1559 нужен max_priority_fee_per_gas".into()).into());
@@ -79,7 +74,6 @@ impl PyTransactionSigner {
         Ok(Self { private_key: Zeroizing::new(private_key) })
     }
 
-    /// Подписывает транзакцию. FIX: валидация перед подписью.
     pub fn sign_transaction(&self, tx: &PyTransactionRequest) -> PyResult<String> {
         tx.validate()?;
         match tx.tx_type() {
@@ -202,8 +196,6 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Парсит строку числа (decimal или 0x-hex) в big-endian bytes.
-/// FIX: добавлен a guard на случай > u128::MAX — возвращает ошибку вместо silent overflow.
 fn parse_u256_str(s: &str) -> PyResult<Vec<u8>> {
     let n: u128 = if s.starts_with("0x") || s.starts_with("0X") {
         u128::from_str_radix(

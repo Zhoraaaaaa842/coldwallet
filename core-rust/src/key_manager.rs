@@ -4,7 +4,7 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm,
 };
 use coins_bip32::{
@@ -27,12 +27,6 @@ use tiny_keccak::{Hasher, Keccak};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::VaultError;
-
-// Полный тип AES-256-GCM nonce: GenericArray<u8, U12>
-type AesNonce = aes_gcm::aead::generic_array::GenericArray<
-    u8,
-    aes_gcm::aead::generic_array::typenum::U12,
->;
 
 const PBKDF2_ITERATIONS: u32 = 600_000;
 const PBKDF2_ITERATIONS_MIN: u32 = 600_000;
@@ -64,12 +58,6 @@ struct WalletData {
     private_key: Zeroizing<Vec<u8>>,
     address: String,
     mnemonic: Option<Zeroizing<String>>,
-}
-
-/// Преобразует &[u8] (12 байт) в AesNonce без deprecated from_slice
-fn bytes_to_nonce(bytes: &[u8]) -> AesNonce {
-    let arr: [u8; 12] = bytes.try_into().expect("nonce должен быть 12 байт");
-    arr.into()
 }
 
 pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
@@ -188,9 +176,11 @@ impl PyKeyManager {
         }
 
         let mut salt = [0u8; 32];
-        let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+        // Генерируем nonce через AeadCore::generate_nonce — правильный способ для aes-gcm 0.10
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce_bytes: [u8; 12] = nonce.into();
 
         let enc_key = derive_encryption_key(password.as_bytes(), &salt, PBKDF2_ITERATIONS);
 
@@ -205,7 +195,6 @@ impl PyKeyManager {
 
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
-        let nonce = bytes_to_nonce(&nonce_bytes);
         let aad_str = wallet.address.to_lowercase();
         let aad = aad_str.as_bytes();
         let ciphertext = cipher
@@ -286,6 +275,9 @@ impl PyKeyManager {
             .map_err(|_| VaultError::Logic("Неверный salt hex".into()))?;
         let nonce_bytes = hex::decode(&vault.nonce)
             .map_err(|_| VaultError::Logic("Неверный nonce hex".into()))?;
+        if nonce_bytes.len() != 12 {
+            return Err(VaultError::Logic("Nonce должен быть 12 байт".into()).into());
+        }
         let ciphertext = hex::decode(&vault.ciphertext)
             .map_err(|_| VaultError::Logic("Неверный ciphertext hex".into()))?;
 
@@ -294,7 +286,12 @@ impl PyKeyManager {
 
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
-        let nonce = bytes_to_nonce(&nonce_bytes);
+
+        // Собираем nonce из Vec<u8> через slice — совместимо с aes-gcm 0.10
+        let nonce_arr: [u8; 12] = nonce_bytes.as_slice().try_into()
+            .map_err(|_| VaultError::Logic("Nonce slice error".into()))?;
+        let nonce = aes_gcm::Nonce::from(nonce_arr);
+
         let aad_str = vault.address.to_lowercase();
         let aad = aad_str.as_bytes();
 
