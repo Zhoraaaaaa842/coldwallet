@@ -60,6 +60,12 @@ struct WalletData {
     mnemonic: Option<Zeroizing<String>>,
 }
 
+/// Преобразует &[u8] (12 байт) в Nonce без deprecated from_slice
+fn bytes_to_nonce(bytes: &[u8]) -> Nonce {
+    let arr: [u8; 12] = bytes.try_into().expect("nonce должен быть 12 байт");
+    arr.into()
+}
+
 pub fn derive_address(private_key_bytes: &[u8]) -> Result<String, VaultError> {
     let signing_key = SigningKey::from_slice(private_key_bytes)
         .map_err(|e| VaultError::Crypto(e.to_string()))?;
@@ -193,11 +199,11 @@ impl PyKeyManager {
 
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = bytes_to_nonce(&nonce_bytes);
         let aad_str = wallet.address.to_lowercase();
         let aad = aad_str.as_bytes();
         let ciphertext = cipher
-            .encrypt(nonce, aes_gcm::aead::Payload { msg: &plaintext, aad })
+            .encrypt(&nonce, aes_gcm::aead::Payload { msg: &plaintext, aad })
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
 
         plaintext.zeroize();
@@ -282,12 +288,12 @@ impl PyKeyManager {
 
         let cipher = Aes256Gcm::new_from_slice(enc_key.as_slice())
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = bytes_to_nonce(&nonce_bytes);
         let aad_str = vault.address.to_lowercase();
         let aad = aad_str.as_bytes();
 
         let plaintext_result = cipher.decrypt(
-            nonce,
+            &nonce,
             aes_gcm::aead::Payload { msg: &ciphertext, aad },
         );
 
@@ -380,7 +386,7 @@ fn derive_eth_key_from_seed(seed: &[u8]) -> PyResult<Vec<u8>> {
         .map_err(|e| VaultError::Crypto(format!("Путь: {e}")))?;
     let child = master.derive_path(&path)
         .map_err(|e| VaultError::Crypto(format!("HD: {e}")))?;
-    // coins-bip32 0.13: XPriv implements AsRef<SigningKey>, use to_bytes() via k256
+    // coins-bip32 0.13: XPriv реализует AsRef<SigningKey>
     let signing_key: &k256::ecdsa::SigningKey = child.as_ref();
     Ok(signing_key.to_bytes().to_vec())
 }
