@@ -304,18 +304,20 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  // Start polling for updates
-  let pollingInterval: number | null = null
+  // Polling intervals
+  let usbPollingInterval: number | null = null
+  let pricePollingInterval: number | null = null
+  let balancePollingInterval: number | null = null
 
   function startPolling() {
     // Check USB every 3 seconds
-    setInterval(checkUsbStatus, 3000)
+    usbPollingInterval = window.setInterval(checkUsbStatus, 3000)
     
     // Fetch price every 3 minutes
-    setInterval(fetchEthPrice, 180000)
+    pricePollingInterval = window.setInterval(fetchEthPrice, 180000)
     
     // Fetch balance and nonce every 30 seconds
-    setInterval(() => {
+    balancePollingInterval = window.setInterval(() => {
       if (isWalletReady.value) {
         fetchBalance()
         fetchNonce()
@@ -324,9 +326,17 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   function stopPolling() {
-    if (pollingInterval) {
-      clearInterval(pollingInterval)
-      pollingInterval = null
+    if (usbPollingInterval !== null) {
+      clearInterval(usbPollingInterval)
+      usbPollingInterval = null
+    }
+    if (pricePollingInterval !== null) {
+      clearInterval(pricePollingInterval)
+      pricePollingInterval = null
+    }
+    if (balancePollingInterval !== null) {
+      clearInterval(balancePollingInterval)
+      balancePollingInterval = null
     }
   }
 

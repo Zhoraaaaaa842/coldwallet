@@ -224,10 +224,34 @@ pub fn sign_transaction(tx: serde_json::Value, state: State<AppState>) -> Result
 pub async fn broadcast_transaction(raw_tx: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let rpc_url = state.current_network.lock().map_err(|e| e.to_string())?.rpc_url.clone();
     let receipt = crate::network::broadcast_transaction(&rpc_url, &raw_tx).await?;
-    
-    // Delete from signed folder
-    // (implementation omitted for brevity)
-    
+
+    // Delete the corresponding signed transaction file from USB
+    if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
+        let signed_dir = std::path::Path::new(&usb_path).join("signed");
+        if signed_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&signed_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(tx_json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                // Match by raw_tx field or by hash
+                                let matches = tx_json.get("raw")
+                                    .and_then(|v| v.as_str())
+                                    .map(|r| r == raw_tx)
+                                    .unwrap_or(false);
+                                if matches {
+                                    let _ = std::fs::remove_file(&path);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(receipt)
 }
 
