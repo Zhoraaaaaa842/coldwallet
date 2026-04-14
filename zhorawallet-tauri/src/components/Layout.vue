@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { Send, QrCode, Shield, Settings, Home, Users } from 'lucide-vue-next'
@@ -123,6 +123,8 @@ function onPasswordSuccess() {
   walletStore.fetchNonce()
   walletStore.fetchTransactions()
   walletStore.fetchEthPrice()
+  // Запускаем поллинг после успешной разблокировки
+  walletStore.startPolling()
 }
 
 async function handleCreateWallet(password: string) {
@@ -130,6 +132,7 @@ async function handleCreateWallet(password: string) {
     await walletStore.initializeWallet(password)
     showWalletInitDialog.value = false
     walletStore.fetchEthPrice()
+    walletStore.startPolling()
   } catch (error) {
     console.error('Failed to create wallet:', error)
   }
@@ -140,6 +143,7 @@ async function handleImportWallet(mnemonic: string, password: string) {
     await walletStore.importFromMnemonic(mnemonic, password)
     showWalletInitDialog.value = false
     walletStore.fetchEthPrice()
+    walletStore.startPolling()
   } catch (error) {
     console.error('Failed to import wallet:', error)
   }
@@ -149,18 +153,30 @@ onMounted(async () => {
   // Load networks
   await walletStore.loadNetworks()
   await walletStore.loadCurrentNetwork()
-  
-  // Check if wallet exists
+
+  // Check USB and determine what to show
   try {
     await walletStore.checkUsbStatus()
-    if (!walletStore.state.isInitialized) {
-      showWalletInitDialog.value = true
-    } else if (walletStore.state.isLocked) {
+
+    if (walletStore.usbHasVault) {
+      // Флешка вставлена и vault найден — кошелёк существует, нужно разблокировать
+      walletStore.state.isInitialized = true
       passwordDialogMode.value = 'unlock'
       showPasswordDialog.value = true
+    } else {
+      // Vault не найден — первый запуск или пустая флешка
+      showWalletInitDialog.value = true
     }
   } catch (error) {
     console.error('Failed to check wallet status:', error)
+    showWalletInitDialog.value = true
   }
+
+  // Запускаем поллинг USB сразу — он не зависит от состояния кошелька
+  walletStore.startPolling()
+})
+
+onUnmounted(() => {
+  walletStore.stopPolling()
 })
 </script>
