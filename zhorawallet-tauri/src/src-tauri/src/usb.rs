@@ -2,20 +2,90 @@ use serde_json;
 use std::fs;
 use std::path::Path;
 
+#[cfg(target_os = "windows")]
+fn is_valid_usb_drive(drive_letter: char) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::um::fileapi::{GetDriveTypeW, GetDiskFreeSpaceExW};
+    
+    let drive_path = format!("{}:\\", drive_letter);
+    let wide_path: Vec<u16> = OsStr::new(&drive_path)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    
+    unsafe {
+        let drive_type = GetDriveTypeW(wide_path.as_ptr());
+        
+        // DRIVE_REMOVABLE = 2 (USB, карты памяти)
+        // DRIVE_FIXED = 3 (жесткие диски)
+        // Мы принимаем только съёмные диски
+        if drive_type != 2 {
+            return false;
+        }
+        
+        // Дополнительная проверка: пытаемся получить информацию о свободном месте
+        // Это отсекает виртуальные/пустые съёмные диски
+        let mut free_bytes_available: u64 = 0;
+        let mut total_number_of_bytes: u64 = 0;
+        let mut total_number_of_free_bytes: u64 = 0;
+        
+        let result = GetDiskFreeSpaceExW(
+            wide_path.as_ptr(),
+            &mut free_bytes_available as *mut _ as *mut _,
+            &mut total_number_of_bytes as *mut _ as *mut _,
+            &mut total_number_of_free_bytes as *mut _ as *mut _,
+        );
+        
+        // Если не удалось получить информацию о диске - он невалидный
+        if result == 0 {
+            return false;
+        }
+        
+        // Проверяем что диск имеет разумный размер (> 1 MB)
+        // Это отсекает пустые/виртуальные диски
+        total_number_of_bytes > 1_048_576
+    }
+}
+
+pub struct UsbStatus {
+    pub path: Option<String>,
+    pub has_vault: bool,
+    pub needs_format: bool,
+}
+
+pub fn check_usb_detailed() -> UsbStatus {
+    if let Some(path) = detect_usb_drive() {
+        let vault_path = Path::new(&path).join("wallet.vault");
+        let has_vault = vault_path.exists();
+        let needs_format = !has_vault;
+        
+        UsbStatus {
+            path: Some(path),
+            has_vault,
+            needs_format,
+        }
+    } else {
+        UsbStatus {
+            path: None,
+            has_vault: false,
+            needs_format: false,
+        }
+    }
+}
+
 pub fn detect_usb_drive() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        // Check for removable drives (D:, E:, F:, etc.)
+        // Check for removable drives only (D:, E:, F:, etc.)
         for drive in 'D'..='Z' {
             let path = format!("{}:\\", drive);
-            if Path::new(&path).exists() {
-                // Check if it's removable
-                // In production, use Win32 API to check drive type
+            if Path::new(&path).exists() && is_valid_usb_drive(drive) {
                 return Some(path);
             }
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         // Check /media/$USER for USB drives
@@ -33,7 +103,7 @@ pub fn detect_usb_drive() -> Option<String> {
             }
         }
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         // Check /Volumes for USB drives
@@ -48,7 +118,7 @@ pub fn detect_usb_drive() -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 

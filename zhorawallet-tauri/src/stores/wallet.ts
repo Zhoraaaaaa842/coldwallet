@@ -27,6 +27,9 @@ export const useWalletStore = defineStore('wallet', () => {
   })
 
   const usbStatus = ref<'connected' | 'disconnected'>('disconnected')
+  const usbPath = ref<string | null>(null)
+  const usbHasVault = ref<boolean>(false)
+  const usbNeedsFormat = ref<boolean>(false)
   const broadcastLog = ref<string[]>([])
   
   // Network state
@@ -47,11 +50,24 @@ export const useWalletStore = defineStore('wallet', () => {
   // Actions
   async function checkUsbStatus() {
     try {
-      const status = await invoke<string>('check_usb_status')
-      usbStatus.value = status === 'connected' ? 'connected' : 'disconnected'
+      interface UsbStatusResponse {
+        status: string
+        path: string | null
+        has_vault: boolean
+        needs_format: boolean
+      }
+      
+      const response = await invoke<UsbStatusResponse>('check_usb_status')
+      usbStatus.value = response.status === 'connected' ? 'connected' : 'disconnected'
+      usbPath.value = response.path
+      usbHasVault.value = response.has_vault
+      usbNeedsFormat.value = response.needs_format
     } catch (error) {
       console.error('Failed to check USB status:', error)
       usbStatus.value = 'disconnected'
+      usbPath.value = null
+      usbHasVault.value = false
+      usbNeedsFormat.value = false
     }
   }
 
@@ -320,6 +336,9 @@ export const useWalletStore = defineStore('wallet', () => {
     transactions,
     currentGasSettings,
     usbStatus,
+    usbPath,
+    usbHasVault,
+    usbNeedsFormat,
     broadcastLog,
     availableNetworks,
     currentNetwork,

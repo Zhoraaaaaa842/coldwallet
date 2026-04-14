@@ -148,12 +148,37 @@
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-semibold text-white">Статус подключения</p>
-                <p class="text-xs text-text-muted mt-1">{{ usbPath || 'USB не обнаружен' }}</p>
+                <p class="text-xs text-text-muted mt-1">{{ usbPath || 'Вставьте флешку' }}</p>
               </div>
               <div
                 class="w-3 h-3 rounded-full transition-all duration-300"
                 :class="walletStore.usbStatus === 'connected' ? 'bg-success shadow-[0_0_8px_rgba(0,210,106,0.6)]' : 'bg-error/50'"
               ></div>
+            </div>
+          </div>
+
+          <!-- Warning/Info Messages -->
+          <div v-if="walletStore.usbStatus === 'connected' && walletStore.usbNeedsFormat" class="p-4 bg-warning/10 border border-warning/30 rounded-lg">
+            <div class="flex items-start gap-3">
+              <span class="text-2xl">⚠️</span>
+              <div>
+                <p class="text-sm font-semibold text-warning">Требуется подготовка USB</p>
+                <p class="text-xs text-text-muted mt-1">
+                  На флешке не обнаружен файл wallet.vault. При создании кошелька он будет записан автоматически.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="walletStore.usbStatus === 'connected' && walletStore.usbHasVault" class="p-4 bg-success/10 border border-success/30 rounded-lg">
+            <div class="flex items-start gap-3">
+              <span class="text-2xl">✅</span>
+              <div>
+                <p class="text-sm font-semibold text-success">USB готова к работе</p>
+                <p class="text-xs text-text-muted mt-1">
+                  Файл wallet.vault обнаружен. Кошелёк может работать с этой флешкой.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -316,9 +341,9 @@ function saveRpcSettings() {
 
 async function checkUsb() {
   await walletStore.checkUsbStatus()
-  // Get USB path if connected
+  // Update USB path display
   if (walletStore.usbStatus === 'connected') {
-    usbPath.value = 'USB обнаружен'
+    usbPath.value = walletStore.usbPath || 'USB обнаружен'
   } else {
     usbPath.value = ''
   }

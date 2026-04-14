@@ -6,17 +6,37 @@ use crate::address_book::{AddressBook, Contact};
 use crate::transaction_cache::{Transaction, TransactionCache};
 use crate::validation;
 use bip39::{Mnemonic, Language};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UsbStatusResponse {
+    pub status: String,
+    pub path: Option<String>,
+    pub has_vault: bool,
+    pub needs_format: bool,
+}
 
 #[tauri::command]
-pub fn check_usb_status(state: State<AppState>) -> Result<String, String> {
-    match usb::detect_usb_drive() {
+pub fn check_usb_status(state: State<AppState>) -> Result<UsbStatusResponse, String> {
+    let detailed = usb::check_usb_detailed();
+    
+    match detailed.path {
         Some(path) => {
             let mut usb_path = state.usb_path.lock().map_err(|e| e.to_string())?;
             *usb_path = Some(path.clone());
-            Ok("connected".to_string())
+            Ok(UsbStatusResponse {
+                status: "connected".to_string(),
+                path: Some(path),
+                has_vault: detailed.has_vault,
+                needs_format: detailed.needs_format,
+            })
         }
-        None => Ok("disconnected".to_string()),
+        None => Ok(UsbStatusResponse {
+            status: "disconnected".to_string(),
+            path: None,
+            has_vault: false,
+            needs_format: false,
+        }),
     }
 }
 

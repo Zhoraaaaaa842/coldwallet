@@ -107,8 +107,15 @@
               :class="walletStore.usbStatus === 'connected' ? 'bg-success shadow-[0_0_8px_rgba(0,210,106,0.6)]' : 'bg-error/50'"
             ></div>
             <p class="text-sm text-text-secondary font-medium">
-              {{ walletStore.usbStatus === 'connected' ? 'USB Connected' : 'USB Disconnected' }}
+              {{ walletStore.usbStatus === 'connected' ? 'USB Connected' : 'Вставьте флешку' }}
             </p>
+          </div>
+          <div v-if="walletStore.usbStatus === 'connected' && walletStore.usbNeedsFormat" class="mt-3 p-2 bg-warning/10 border border-warning/30 rounded-lg">
+            <p class="text-xs text-warning font-medium">⚠ Требуется форматирование USB</p>
+            <p class="text-xs text-text-muted mt-1">На флешке нет wallet.vault</p>
+          </div>
+          <div v-else-if="walletStore.usbStatus === 'connected' && walletStore.usbHasVault" class="mt-3 p-2 bg-success/10 border border-success/30 rounded-lg">
+            <p class="text-xs text-success font-medium">✓ Wallet.vault найден</p>
           </div>
         </div>
       </div>

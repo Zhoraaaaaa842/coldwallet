@@ -20,7 +20,7 @@
         :class="usbConnected ? 'bg-success shadow-[0_0_8px_rgba(0,210,106,0.6)]' : 'bg-error/50'"
       ></div>
       <span class="text-xs text-text-secondary font-medium">
-        {{ usbConnected ? 'USB Connected' : 'USB Disconnected' }}
+        {{ usbConnected ? 'USB Connected' : 'Вставьте флешку' }}
       </span>
     </div>
 
