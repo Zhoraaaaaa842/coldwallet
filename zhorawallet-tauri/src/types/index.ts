@@ -11,7 +11,6 @@ export interface Transaction {
   timestamp: number
   status: 'pending' | 'confirmed' | 'failed'
   type: 'incoming' | 'outgoing'
-  tx_type?: 'incoming' | 'outgoing' // For cached transactions
   confirmations?: number
 }
 
@@ -30,10 +29,8 @@ export interface WalletState {
 export interface GasSettings {
   type: 'eip1559' | 'legacy'
   gasLimit: number
-  // EIP-1559
   maxFeePerGas?: number
   maxPriorityFeePerGas?: number
-  // Legacy
   gasPrice?: number
 }
 
