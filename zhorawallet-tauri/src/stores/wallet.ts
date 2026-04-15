@@ -13,11 +13,7 @@ export const useWalletStore = defineStore('wallet', () => {
     network: 'Ethereum Mainnet',
   })
 
-  const priceData = ref<PriceData>({
-    ethRub: 0,
-    lastUpdated: 0,
-  })
-
+  const priceData = ref<PriceData>({ ethRub: 0, lastUpdated: 0 })
   const transactions = ref<Transaction[]>([])
   const currentGasSettings = ref<GasSettings>({
     type: 'eip1559',
@@ -31,32 +27,17 @@ export const useWalletStore = defineStore('wallet', () => {
   const usbHasVault = ref<boolean>(false)
   const usbNeedsFormat = ref<boolean>(false)
   const broadcastLog = ref<string[]>([])
-  
-  // Network state
   const availableNetworks = ref<Network[]>([])
   const currentNetwork = ref<Network | null>(null)
-  
-  // Address book state
   const contacts = ref<Contact[]>([])
 
-  // Computed
-  const isWalletReady = computed(() => 
-    state.value.isInitialized && !state.value.isLocked && state.value.address !== null
-  )
-
+  const isWalletReady = computed(() => state.value.isInitialized && !state.value.isLocked && state.value.address !== null)
   const balanceEth = computed(() => state.value.balance.eth)
   const balanceRub = computed(() => state.value.balance.rub)
 
-  // Actions
   async function checkUsbStatus() {
     try {
-      interface UsbStatusResponse {
-        status: string
-        path: string | null
-        has_vault: boolean
-        needs_format: boolean
-      }
-      
+      interface UsbStatusResponse { status: string; path: string | null; has_vault: boolean; needs_format: boolean }
       const response = await invoke<UsbStatusResponse>('check_usb_status')
       usbStatus.value = response.status === 'connected' ? 'connected' : 'disconnected'
       usbPath.value = response.path
@@ -102,6 +83,7 @@ export const useWalletStore = defineStore('wallet', () => {
       const address = await invoke<string>('unlock_wallet', { password })
       state.value.address = address
       state.value.isLocked = false
+      state.value.isInitialized = true
       return true
     } catch (error) {
       console.error('Failed to unlock wallet:', error)
@@ -116,7 +98,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
   async function fetchBalance() {
     if (!state.value.address) return
-    
     try {
       const balance = await invoke<string>('get_balance', { address: state.value.address })
       state.value.balance.eth = balance
@@ -128,7 +109,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
   async function fetchNonce() {
     if (!state.value.address) return
-    
     try {
       const nonce = await invoke<number>('get_nonce', { address: state.value.address })
       state.value.nonce = nonce
@@ -157,11 +137,8 @@ export const useWalletStore = defineStore('wallet', () => {
 
   async function fetchTransactions() {
     if (!state.value.address) return
-    
     try {
-      const txs = await invoke<Transaction[]>('get_transaction_history', { 
-        address: state.value.address 
-      })
+      const txs = await invoke<Transaction[]>('get_transaction_history', { address: state.value.address })
       transactions.value = txs
     } catch (error) {
       console.error('Failed to fetch transactions:', error)
@@ -176,7 +153,6 @@ export const useWalletStore = defineStore('wallet', () => {
     broadcastLog.value = []
   }
 
-  // Network actions
   async function loadNetworks() {
     try {
       const networks = await invoke<Network[]>('get_all_networks')
@@ -201,7 +177,6 @@ export const useWalletStore = defineStore('wallet', () => {
       const network = await invoke<Network>('switch_network', { networkId })
       currentNetwork.value = network
       state.value.network = network.name
-      // Refresh data after network switch
       await fetchBalance()
       await fetchTransactions()
     } catch (error) {
@@ -210,7 +185,6 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  // Address Book actions
   async function loadContacts() {
     try {
       const contactsList = await invoke<Contact[]>('get_all_contacts')
@@ -237,13 +211,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await invoke('update_contact', { id, name, address, note })
       const index = contacts.value.findIndex(c => c.id === id)
       if (index !== -1) {
-        contacts.value[index] = {
-          ...contacts.value[index],
-          name,
-          address,
-          note,
-          updatedAt: Date.now(),
-        }
+        contacts.value[index] = { ...contacts.value[index], name, address, note, updatedAt: Date.now() }
       }
     } catch (error) {
       console.error('Failed to update contact:', error)
@@ -271,14 +239,12 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  // Transaction Cache actions
   async function getCachedTransactions(forceRefresh = false): Promise<Transaction[]> {
     if (!state.value.address) return []
-    
     try {
       const txs = await invoke<Transaction[]>('get_cached_transactions', {
         address: state.value.address,
-        forceRefresh
+        forceRefresh,
       })
       transactions.value = txs
       return txs
@@ -292,11 +258,8 @@ export const useWalletStore = defineStore('wallet', () => {
     if (!state.value.address) {
       return { totalReceived: 0, totalSent: 0, transactionCount: 0, lastUpdated: 0 }
     }
-    
     try {
-      const summary = await invoke<BalanceSummary>('get_balance_summary', {
-        address: state.value.address
-      })
+      const summary = await invoke<BalanceSummary>('get_balance_summary', { address: state.value.address })
       return summary
     } catch (error) {
       console.error('Failed to get balance summary:', error)
@@ -304,19 +267,13 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  // Polling intervals
   let usbPollingInterval: number | null = null
   let pricePollingInterval: number | null = null
   let balancePollingInterval: number | null = null
 
   function startPolling() {
-    // Check USB every 3 seconds
     usbPollingInterval = window.setInterval(checkUsbStatus, 3000)
-    
-    // Fetch price every 3 minutes
     pricePollingInterval = window.setInterval(fetchEthPrice, 180000)
-    
-    // Fetch balance and nonce every 30 seconds
     balancePollingInterval = window.setInterval(() => {
       if (isWalletReady.value) {
         fetchBalance()
@@ -326,18 +283,9 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   function stopPolling() {
-    if (usbPollingInterval !== null) {
-      clearInterval(usbPollingInterval)
-      usbPollingInterval = null
-    }
-    if (pricePollingInterval !== null) {
-      clearInterval(pricePollingInterval)
-      pricePollingInterval = null
-    }
-    if (balancePollingInterval !== null) {
-      clearInterval(balancePollingInterval)
-      balancePollingInterval = null
-    }
+    if (usbPollingInterval !== null) { clearInterval(usbPollingInterval); usbPollingInterval = null }
+    if (pricePollingInterval !== null) { clearInterval(pricePollingInterval); pricePollingInterval = null }
+    if (balancePollingInterval !== null) { clearInterval(balancePollingInterval); balancePollingInterval = null }
   }
 
   return {
