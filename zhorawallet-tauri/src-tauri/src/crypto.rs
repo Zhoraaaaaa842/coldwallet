@@ -22,7 +22,7 @@ struct VaultData {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
-    checksum: Vec<u8>,
+    // checksum removed: AES-GCM authentication tag is sufficient
 }
 
 pub fn derive_key(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
@@ -38,16 +38,11 @@ fn generate_salt() -> Vec<u8> {
     salt
 }
 
-fn calculate_checksum(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().to_vec()
-}
-
 /// BIP-32 child key derivation (hardened)
-fn derive_child_key(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> ([u8; 32], [u8; 32]) {
+fn derive_child_key_hardened(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> ([u8; 32], [u8; 32]) {
     type HmacSha512 = Hmac<Sha512>;
     let mut mac = HmacSha512::new_from_slice(parent_chain).expect("HMAC init failed");
+    // Hardened: 0x00 || privkey || (index | 0x80000000)
     mac.update(&[0u8]);
     mac.update(parent_key);
     mac.update(&(index | 0x8000_0000u32).to_be_bytes());
@@ -57,6 +52,32 @@ fn derive_child_key(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) 
     child_key.copy_from_slice(&result[..32]);
     child_chain.copy_from_slice(&result[32..]);
     (child_key, child_chain)
+}
+
+/// BIP-32 child key derivation (non-hardened)
+fn derive_child_key_normal(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> Result<([u8; 32], [u8; 32]), String> {
+    // Non-hardened: compressed_pubkey || index (index < 0x80000000)
+    assert!(index < 0x8000_0000, "Non-hardened index must be < 0x80000000");
+    type HmacSha512 = Hmac<Sha512>;
+    let mut mac = HmacSha512::new_from_slice(parent_chain).expect("HMAC init failed");
+    let compressed_pubkey = index_to_compressed_pubkey(parent_key)?;
+    mac.update(&compressed_pubkey);
+    mac.update(&index.to_be_bytes());
+    let result = mac.finalize().into_bytes();
+
+    // child_key = (IL + parent_key) mod n
+    use k256::elliptic_curve::ops::Reduce;
+    use k256::{U256, Scalar};
+    let mut il = [0u8; 32];
+    let mut child_chain = [0u8; 32];
+    il.copy_from_slice(&result[..32]);
+    child_chain.copy_from_slice(&result[32..]);
+
+    let scalar_il = Scalar::reduce_bytes((&il).into());
+    let scalar_parent = Scalar::reduce_bytes(parent_key.into());
+    let child_scalar = scalar_il + scalar_parent;
+    let child_key: [u8; 32] = child_scalar.to_bytes().into();
+    Ok((child_key, child_chain))
 }
 
 /// Keccak-256 hash
@@ -85,42 +106,19 @@ pub fn derive_eth_keypair(mnemonic: &str) -> Result<(Vec<u8>, String), String> {
     master_key.copy_from_slice(&result[..32]);
     master_chain.copy_from_slice(&result[32..]);
 
-    // m/44'/60'/0'/0/0
-    let (k1, c1) = derive_child_key(&master_key, &master_chain, 44);
-    let (k2, c2) = derive_child_key(&k1, &c1, 60);
-    let (k3, c3) = derive_child_key(&k2, &c2, 0);
-    // Non-hardened for index 0 and account 0
-    // m/44'/60'/0'/0 (non-hardened change)
-    type HmacSha512b = Hmac<Sha512>;
-    let mut mac2 = HmacSha512b::new_from_slice(&c3).expect("HMAC init");
-    mac2.update(&[0u8]); // non-hardened: pubkey prefix + index
-    mac2.update(&index_to_compressed_pubkey(&k3)?);
-    mac2.update(&0u32.to_be_bytes());
-    let r2 = mac2.finalize().into_bytes();
-    let mut change_key = [0u8; 32];
-    let mut change_chain = [0u8; 32];
-    change_key.copy_from_slice(&r2[..32]);
-    change_chain.copy_from_slice(&r2[32..]);
+    // m/44' /60' /0' (hardened)
+    let (k1, c1) = derive_child_key_hardened(&master_key, &master_chain, 44);
+    let (k2, c2) = derive_child_key_hardened(&k1, &c1, 60);
+    let (k3, c3) = derive_child_key_hardened(&k2, &c2, 0);
 
-    // Final index 0 (non-hardened)
-    let mut mac3 = HmacSha512b::new_from_slice(&change_chain).expect("HMAC init");
-    mac3.update(&[0u8]);
-    mac3.update(&index_to_compressed_pubkey(&change_key)?);
-    mac3.update(&0u32.to_be_bytes());
-    let r3 = mac3.finalize().into_bytes();
-    let mut final_key = [0u8; 32];
-    final_key.copy_from_slice(&r3[..32]);
+    // m/44'/60'/0'/0 (non-hardened change index)
+    let (k4, c4) = derive_child_key_normal(&k3, &c3, 0)?;
 
-    // Add keys mod n (secp256k1 addition)
-    use k256::elliptic_curve::ops::Reduce;
-    use k256::{U256, Scalar};
-    let scalar_parent = Scalar::reduce_bytes((&change_key).into());
-    let scalar_child = Scalar::reduce_bytes((&final_key).into());
-    let scalar_sum = scalar_parent + scalar_child;
-    let child_key_bytes: [u8; 32] = scalar_sum.to_bytes().into();
+    // m/44'/60'/0'/0/0 (non-hardened address index)
+    let (final_key, _) = derive_child_key_normal(&k4, &c4, 0)?;
 
-    let address = privkey_to_eth_address(&child_key_bytes)?;
-    Ok((child_key_bytes.to_vec(), address))
+    let address = privkey_to_eth_address(&final_key)?;
+    Ok((final_key.to_vec(), address))
 }
 
 fn index_to_compressed_pubkey(privkey: &[u8; 32]) -> Result<Vec<u8>, String> {
@@ -136,11 +134,9 @@ fn privkey_to_eth_address(privkey: &[u8; 32]) -> Result<String, String> {
     let secret = SecretKey::from_bytes(privkey.into())
         .map_err(|e| format!("Invalid private key: {}", e))?;
     let pubkey = secret.public_key();
-    // Uncompressed pubkey, skip 0x04 prefix → 64 bytes
     let encoded = pubkey.to_encoded_point(false);
     let pubkey_bytes = &encoded.as_bytes()[1..];
     let hash = keccak256(pubkey_bytes);
-    // Last 20 bytes = Ethereum address
     let addr_bytes = &hash[12..];
     Ok(format!("0x{}", hex::encode(addr_bytes)))
 }
@@ -159,13 +155,12 @@ pub fn encrypt_vault(mnemonic: &str, password: &str) -> Result<Vec<u8>, String> 
     let nonce = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
     let ciphertext = cipher.encrypt(&nonce, mnemonic.as_bytes().as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
-    let checksum = calculate_checksum(mnemonic.as_bytes());
+    // No plaintext checksum — AES-GCM authentication tag guarantees integrity
     let vault_data = VaultData {
         version: VAULT_VERSION,
         salt: salt.to_vec(),
         nonce: nonce.to_vec(),
         ciphertext,
-        checksum,
     };
     serde_json::to_vec(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))
 }
@@ -182,10 +177,6 @@ pub fn decrypt_vault(encrypted: &[u8], password: &str) -> Result<String, String>
     let nonce = GenericArray::from_slice(&vault_data.nonce);
     let plaintext = cipher.decrypt(nonce, vault_data.ciphertext.as_ref())
         .map_err(|_| "Decryption failed: incorrect password or corrupted data".to_string())?;
-    let checksum = calculate_checksum(&plaintext);
-    if checksum != vault_data.checksum {
-        return Err("Data integrity check failed: vault may be corrupted".to_string());
-    }
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 
@@ -219,6 +210,28 @@ pub fn create_unsigned_transaction(
     }))
 }
 
+/// Parse ETH string to Wei (u128) without float precision loss
+fn eth_str_to_wei(eth_str: &str) -> Result<u128, String> {
+    let eth_str = eth_str.trim();
+    let (int_part, frac_part) = if let Some(dot_pos) = eth_str.find('.') {
+        (&eth_str[..dot_pos], &eth_str[dot_pos + 1..])
+    } else {
+        (eth_str, "")
+    };
+
+    let int_wei: u128 = int_part.parse::<u128>()
+        .map_err(|_| format!("Invalid ETH integer part: {}", int_part))?
+        .checked_mul(1_000_000_000_000_000_000u128)
+        .ok_or("ETH value overflow")?;
+
+    let frac_18 = format!("{:0<18}", frac_part);
+    let frac_trimmed = &frac_18[..18];
+    let frac_wei: u128 = frac_trimmed.parse::<u128>()
+        .map_err(|_| format!("Invalid ETH fractional part: {}", frac_part))?;
+
+    int_wei.checked_add(frac_wei).ok_or_else(|| "ETH value overflow".to_string())
+}
+
 /// Sign EIP-1559 transaction and return raw hex
 pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_json::Value, String> {
     let to = tx.get("to").and_then(|v| v.as_str()).ok_or("Missing 'to'")?;
@@ -229,45 +242,35 @@ pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_
     let max_priority = tx.get("maxPriorityFeePerGas").and_then(|v| v.as_f64()).unwrap_or(2.0);
     let chain_id: u64 = tx.get("chainId").and_then(|v| v.as_u64()).unwrap_or(1);
 
-    // Parse value: accept ETH float string → wei u128
-    let value_eth: f64 = value_str.parse().map_err(|_| "Invalid value format")?;
-    let value_wei: u128 = (value_eth * 1e18) as u128;
-
-    // Convert gwei → wei
+    let value_wei: u128 = eth_str_to_wei(value_str)?;
     let max_fee_wei: u128 = (max_fee * 1e9) as u128;
     let max_priority_wei: u128 = (max_priority * 1e9) as u128;
 
-    // Parse to address
     let to_bytes = hex::decode(to.trim_start_matches("0x"))
         .map_err(|_| "Invalid 'to' address")?;
 
-    // EIP-1559 RLP encoding: [chain_id, nonce, max_priority, max_fee, gas_limit, to, value, data, access_list]
-    let mut rlp_items: Vec<Vec<u8>> = vec![
+    let rlp_items: Vec<Vec<u8>> = vec![
         rlp_encode_u64(chain_id),
         rlp_encode_u64(nonce),
         rlp_encode_u128(max_priority_wei),
         rlp_encode_u128(max_fee_wei),
         rlp_encode_u64(gas_limit),
-        to_bytes.clone(),
+        rlp_encode_bytes(&to_bytes),
         rlp_encode_u128(value_wei),
-        vec![],    // data (empty)
-        vec![0xc0], // access_list (empty list)
+        vec![0x80],
+        vec![0xc0],
     ];
 
     let rlp_list = rlp_encode_list(&rlp_items);
-    // EIP-2718 type 2 prefix
     let mut signing_payload = vec![0x02u8];
     signing_payload.extend_from_slice(&rlp_list);
 
-    // Hash the signing payload
     let msg_hash = keccak256(&signing_payload);
 
-    // Get private key
     let (privkey_bytes, _) = derive_eth_keypair(mnemonic)?;
     let signing_key = SigningKey::from_bytes(privkey_bytes.as_slice().into())
         .map_err(|e| format!("Invalid private key: {}", e))?;
 
-    // Sign
     let (sig, recovery_id) = signing_key.sign_prehash_recoverable(&msg_hash)
         .map_err(|e| format!("Signing failed: {}", e))?;
     let sig_bytes = sig.to_bytes();
@@ -275,20 +278,19 @@ pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_
     let s = &sig_bytes[32..];
     let v = recovery_id.to_byte() as u64;
 
-    // Encode signed tx RLP
     let signed_items: Vec<Vec<u8>> = vec![
         rlp_encode_u64(chain_id),
         rlp_encode_u64(nonce),
         rlp_encode_u128(max_priority_wei),
         rlp_encode_u128(max_fee_wei),
         rlp_encode_u64(gas_limit),
-        to_bytes,
+        rlp_encode_bytes(&to_bytes),
         rlp_encode_u128(value_wei),
-        vec![],
+        vec![0x80],
         vec![0xc0],
         rlp_encode_u64(v),
-        r.to_vec(),
-        s.to_vec(),
+        rlp_encode_bytes(r),
+        rlp_encode_bytes(s),
     ];
     let signed_rlp = rlp_encode_list(&signed_items);
     let mut raw_tx = vec![0x02u8];
@@ -322,7 +324,7 @@ fn rlp_encode_u128(v: u128) -> Vec<u8> {
     rlp_encode_bytes(&trimmed)
 }
 
-fn rlp_encode_bytes(data: &[u8]) -> Vec<u8> {
+pub fn rlp_encode_bytes(data: &[u8]) -> Vec<u8> {
     if data.len() == 1 && data[0] < 0x80 {
         return data.to_vec();
     }
