@@ -11,6 +11,8 @@ export interface Transaction {
   timestamp: number
   status: 'pending' | 'confirmed' | 'failed'
   type: 'incoming' | 'outgoing'
+  /** Алиас type — приходит с бэкенда в некоторых ответах */
+  tx_type?: 'incoming' | 'outgoing'
   confirmations?: number
 }
 
