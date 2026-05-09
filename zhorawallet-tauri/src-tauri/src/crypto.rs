@@ -5,12 +5,14 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::{Sha256, Sha512, Digest};
 use hmac::{Hmac, Mac};
 use bip39::{Mnemonic, Language};
-use k256::ecdsa::{SigningKey, signature::hazmat::PrehashSigner};
+use k256::ecdsa::SigningKey;
 use k256::SecretKey;
 use hex;
 use std::fs;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
+
+type HmacSha512 = Hmac<Sha512>;
 
 const VAULT_VERSION: u8 = 2;
 const ITERATIONS: u32 = 1_000_000;
@@ -40,8 +42,7 @@ fn generate_salt() -> Vec<u8> {
 
 /// BIP-32 child key derivation (hardened)
 fn derive_child_key_hardened(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> ([u8; 32], [u8; 32]) {
-    type HmacSha512 = Hmac<Sha512>;
-    let mut mac = HmacSha512::new_from_slice(parent_chain).expect("HMAC init failed");
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(parent_chain).expect("HMAC init failed");
     // Hardened: 0x00 || privkey || (index | 0x80000000)
     mac.update(&[0u8]);
     mac.update(parent_key);
@@ -56,18 +57,15 @@ fn derive_child_key_hardened(parent_key: &[u8; 32], parent_chain: &[u8; 32], ind
 
 /// BIP-32 child key derivation (non-hardened)
 fn derive_child_key_normal(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> Result<([u8; 32], [u8; 32]), String> {
-    // Non-hardened: compressed_pubkey || index (index < 0x80000000)
     assert!(index < 0x8000_0000, "Non-hardened index must be < 0x80000000");
-    type HmacSha512 = Hmac<Sha512>;
-    let mut mac = HmacSha512::new_from_slice(parent_chain).expect("HMAC init failed");
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(parent_chain).expect("HMAC init failed");
     let compressed_pubkey = index_to_compressed_pubkey(parent_key)?;
     mac.update(&compressed_pubkey);
     mac.update(&index.to_be_bytes());
     let result = mac.finalize().into_bytes();
 
-    // child_key = (IL + parent_key) mod n
     use k256::elliptic_curve::ops::Reduce;
-    use k256::{U256, Scalar};
+    use k256::Scalar;
     let mut il = [0u8; 32];
     let mut child_chain = [0u8; 32];
     il.copy_from_slice(&result[..32]);
@@ -90,15 +88,14 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Derives real Ethereum private key + address via BIP-44: m/44'/60'/0'/0/0
+/// Derives Ethereum private key + address via BIP-44: m/44'/60'/0'/0/0
 pub fn derive_eth_keypair(mnemonic: &str) -> Result<(Vec<u8>, String), String> {
     let mnemonic_obj = Mnemonic::parse_in_normalized(Language::English, mnemonic)
         .map_err(|e| format!("Invalid mnemonic: {}", e))?;
     let seed = mnemonic_obj.to_seed("");
 
-    // Master key from seed (HMAC-SHA512 with "Bitcoin seed")
-    type HmacSha512 = Hmac<Sha512>;
-    let mut mac = HmacSha512::new_from_slice(b"Bitcoin seed").expect("HMAC init");
+    // Master key from seed
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(b"Bitcoin seed").expect("HMAC init");
     mac.update(&seed);
     let result = mac.finalize().into_bytes();
     let mut master_key = [0u8; 32];
@@ -106,7 +103,7 @@ pub fn derive_eth_keypair(mnemonic: &str) -> Result<(Vec<u8>, String), String> {
     master_key.copy_from_slice(&result[..32]);
     master_chain.copy_from_slice(&result[32..]);
 
-    // m/44' /60' /0' (hardened)
+    // m/44'/60'/0' (hardened)
     let (k1, c1) = derive_child_key_hardened(&master_key, &master_chain, 44);
     let (k2, c2) = derive_child_key_hardened(&k1, &c1, 60);
     let (k3, c3) = derive_child_key_hardened(&k2, &c2, 0);
@@ -141,7 +138,6 @@ fn privkey_to_eth_address(privkey: &[u8; 32]) -> Result<String, String> {
     Ok(format!("0x{}", hex::encode(addr_bytes)))
 }
 
-/// Public wrapper used by commands.rs
 pub fn derive_address_from_mnemonic(mnemonic: &str, _password: &str) -> Result<String, String> {
     let (_, address) = derive_eth_keypair(mnemonic)?;
     Ok(address)
@@ -155,7 +151,6 @@ pub fn encrypt_vault(mnemonic: &str, password: &str) -> Result<Vec<u8>, String> 
     let nonce = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
     let ciphertext = cipher.encrypt(&nonce, mnemonic.as_bytes().as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
-    // No plaintext checksum — AES-GCM authentication tag guarantees integrity
     let vault_data = VaultData {
         version: VAULT_VERSION,
         salt: salt.to_vec(),
@@ -234,6 +229,8 @@ fn eth_str_to_wei(eth_str: &str) -> Result<u128, String> {
 
 /// Sign EIP-1559 transaction and return raw hex
 pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_json::Value, String> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
     let to = tx.get("to").and_then(|v| v.as_str()).ok_or("Missing 'to'")?;
     let value_str = tx.get("value").and_then(|v| v.as_str()).ok_or("Missing 'value'")?;
     let nonce = tx.get("nonce").and_then(|v| v.as_u64()).ok_or("Missing 'nonce'")?;
