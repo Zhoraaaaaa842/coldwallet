@@ -11,6 +11,11 @@ use hex;
 use std::fs;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
+// FIX #3: use OsRng instead of thread_rng for cryptographic randomness.
+// thread_rng may have low entropy at OS startup; OsRng reads directly from
+// the OS CSPRNG (/dev/urandom on Linux/macOS, BCryptGenRandom on Windows).
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -34,9 +39,9 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn generate_salt() -> Vec<u8> {
-    use rand::RngCore;
     let mut salt = vec![0u8; SALT_SIZE];
-    rand::thread_rng().fill_bytes(&mut salt);
+    // FIX #3: OsRng instead of thread_rng
+    OsRng.fill_bytes(&mut salt);
     salt
 }
 
@@ -148,7 +153,8 @@ pub fn encrypt_vault(mnemonic: &str, password: &str) -> Result<Vec<u8>, String> 
     let key = derive_key(password, &salt)?;
     let key = GenericArray::from_slice(&key);
     let cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
+    // FIX #3: OsRng for nonce generation
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher.encrypt(&nonce, mnemonic.as_bytes().as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
     let vault_data = VaultData {
@@ -175,10 +181,16 @@ pub fn decrypt_vault(encrypted: &[u8], password: &str) -> Result<String, String>
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 
+/// FIX #2: Atomic vault write — write to .tmp then rename.
+/// Prevents vault corruption if the process crashes mid-write.
 pub fn save_vault(usb_path: &str, mnemonic: &str, password: &str) -> Result<(), String> {
     let encrypted = encrypt_vault(mnemonic, password)?;
     let vault_path = Path::new(usb_path).join("wallet.vault");
-    fs::write(&vault_path, encrypted).map_err(|e| format!("Failed to write vault: {}", e))?;
+    let tmp_path = Path::new(usb_path).join("wallet.vault.tmp");
+    fs::write(&tmp_path, &encrypted)
+        .map_err(|e| format!("Failed to write vault tmp: {}", e))?;
+    fs::rename(&tmp_path, &vault_path)
+        .map_err(|e| format!("Failed to rename vault: {}", e))?;
     Ok(())
 }
 
@@ -199,9 +211,10 @@ pub fn create_unsigned_transaction(
         "value": amount,
         "nonce": nonce,
         "gasLimit": gas_settings.get("gasLimit").and_then(|v| v.as_u64()).unwrap_or(21000),
-        "gasPrice": gas_settings.get("gasPrice").and_then(|v| v.as_f64()),
-        "maxFeePerGas": gas_settings.get("maxFeePerGas").and_then(|v| v.as_f64()),
-        "maxPriorityFeePerGas": gas_settings.get("maxPriorityFeePerGas").and_then(|v| v.as_f64()),
+        // FIX #4: store gas fees as strings to preserve precision across USB transfer.
+        // sign_transaction will parse them as integer gwei strings.
+        "maxFeePerGas": gas_settings.get("maxFeePerGas").and_then(|v| v.as_str()).unwrap_or("20"),
+        "maxPriorityFeePerGas": gas_settings.get("maxPriorityFeePerGas").and_then(|v| v.as_str()).unwrap_or("2"),
     }))
 }
 
@@ -227,6 +240,26 @@ fn eth_str_to_wei(eth_str: &str) -> Result<u128, String> {
     int_wei.checked_add(frac_wei).ok_or_else(|| "ETH value overflow".to_string())
 }
 
+/// FIX #4: Parse gwei string to wei as integer (no float intermediary).
+/// Input: gwei as decimal string (e.g. "20" or "1.5").
+fn gwei_str_to_wei(gwei_str: &str) -> Result<u128, String> {
+    let gwei_str = gwei_str.trim();
+    let (int_part, frac_part) = if let Some(dot_pos) = gwei_str.find('.') {
+        (&gwei_str[..dot_pos], &gwei_str[dot_pos + 1..])
+    } else {
+        (gwei_str, "")
+    };
+    let int_wei: u128 = int_part.parse::<u128>()
+        .map_err(|_| format!("Invalid gwei integer part: {}", int_part))?
+        .checked_mul(1_000_000_000u128)
+        .ok_or("gwei value overflow")?;
+    let frac_9 = format!("{:0<9}", frac_part);
+    let frac_trimmed = &frac_9[..9];
+    let frac_wei: u128 = frac_trimmed.parse::<u128>()
+        .map_err(|_| format!("Invalid gwei fractional part: {}", frac_part))?;
+    int_wei.checked_add(frac_wei).ok_or_else(|| "gwei value overflow".to_string())
+}
+
 /// Sign EIP-1559 transaction and return raw hex
 pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_json::Value, String> {
     use k256::ecdsa::signature::hazmat::PrehashSigner;
@@ -235,13 +268,19 @@ pub fn sign_transaction(tx: &serde_json::Value, mnemonic: &str) -> Result<serde_
     let value_str = tx.get("value").and_then(|v| v.as_str()).ok_or("Missing 'value'")?;
     let nonce = tx.get("nonce").and_then(|v| v.as_u64()).ok_or("Missing 'nonce'")?;
     let gas_limit = tx.get("gasLimit").and_then(|v| v.as_u64()).unwrap_or(21000);
-    let max_fee = tx.get("maxFeePerGas").and_then(|v| v.as_f64()).unwrap_or(20.0);
-    let max_priority = tx.get("maxPriorityFeePerGas").and_then(|v| v.as_f64()).unwrap_or(2.0);
     let chain_id: u64 = tx.get("chainId").and_then(|v| v.as_u64()).unwrap_or(1);
 
     let value_wei: u128 = eth_str_to_wei(value_str)?;
-    let max_fee_wei: u128 = (max_fee * 1e9) as u128;
-    let max_priority_wei: u128 = (max_priority * 1e9) as u128;
+
+    // FIX #4: parse gas as integer gwei strings, no f64 intermediate
+    let max_fee_str = tx.get("maxFeePerGas")
+        .and_then(|v| v.as_str())
+        .unwrap_or("20");
+    let max_priority_str = tx.get("maxPriorityFeePerGas")
+        .and_then(|v| v.as_str())
+        .unwrap_or("2");
+    let max_fee_wei: u128 = gwei_str_to_wei(max_fee_str)?;
+    let max_priority_wei: u128 = gwei_str_to_wei(max_priority_str)?;
 
     let to_bytes = hex::decode(to.trim_start_matches("0x"))
         .map_err(|_| "Invalid 'to' address")?;

@@ -145,7 +145,6 @@ pub fn detect_usb_drive() -> Option<String> {
 
     #[cfg(target_os = "linux")]
     {
-        // Traverse /media/<username>/<device-label>/ — return the mount point directory
         if let Ok(user_entries) = fs::read_dir("/media") {
             for user_entry in user_entries.flatten() {
                 let user_path = user_entry.path();
@@ -164,7 +163,6 @@ pub fn detect_usb_drive() -> Option<String> {
 
     #[cfg(target_os = "macos")]
     {
-        // /Volumes contains the system disk — skip known system volumes
         const SYSTEM_VOLUMES: &[&str] = &["Macintosh HD", "Macintosh SSD", "System"];
         if let Ok(entries) = fs::read_dir("/Volumes") {
             for entry in entries.flatten() {
@@ -182,71 +180,102 @@ pub fn detect_usb_drive() -> Option<String> {
     None
 }
 
+/// FIX #2: Atomic write for pending transactions.
 pub fn save_pending_transaction(usb_path: &str, tx: &serde_json::Value) -> Result<String, String> {
     let pending_dir = Path::new(usb_path).join("pending");
     fs::create_dir_all(&pending_dir).map_err(|e| format!("Failed to create pending dir: {}", e))?;
     let tx_id = format!("tx_{}.json", chrono::Utc::now().timestamp_millis());
     let tx_path = pending_dir.join(&tx_id);
+    let tmp_path = pending_dir.join(format!("{}.tmp", tx_id));
     let json = serde_json::to_string_pretty(tx).map_err(|e| format!("Failed to serialize tx: {}", e))?;
-    fs::write(&tx_path, json).map_err(|e| format!("Failed to write tx: {}", e))?;
+    fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write tx tmp: {}", e))?;
+    fs::rename(&tmp_path, &tx_path).map_err(|e| format!("Failed to rename tx: {}", e))?;
     Ok(tx_path.to_string_lossy().to_string())
 }
 
+/// FIX #2: Atomic write for signed transactions.
 pub fn save_signed_transaction(usb_path: &str, tx: &serde_json::Value) -> Result<String, String> {
     let signed_dir = Path::new(usb_path).join("signed");
     fs::create_dir_all(&signed_dir).map_err(|e| format!("Failed to create signed dir: {}", e))?;
     let tx_id = format!("tx_{}.json", chrono::Utc::now().timestamp_millis());
     let tx_path = signed_dir.join(&tx_id);
+    let tmp_path = signed_dir.join(format!("{}.tmp", tx_id));
     let json = serde_json::to_string_pretty(tx).map_err(|e| format!("Failed to serialize tx: {}", e))?;
-    fs::write(&tx_path, json).map_err(|e| format!("Failed to write tx: {}", e))?;
+    fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write tx tmp: {}", e))?;
+    fs::rename(&tmp_path, &tx_path).map_err(|e| format!("Failed to rename tx: {}", e))?;
     Ok(tx_path.to_string_lossy().to_string())
 }
 
+/// FIX #5: canonicalize() each entry path and verify it's inside pending_dir
+/// before reading. Prevents symlink traversal on Linux/macOS.
 pub fn scan_pending_transactions(usb_path: &str) -> Result<Vec<serde_json::Value>, String> {
     let pending_dir = Path::new(usb_path).join("pending");
     if !pending_dir.exists() { return Ok(vec![]); }
+    let canonical_pending = pending_dir.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize pending dir: {}", e))?;
     let mut transactions = vec![];
     let mut id_counter = 1;
     if let Ok(entries) = fs::read_dir(&pending_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let content = fs::read_to_string(&path)
-                    .map_err(|e| format!("Failed to read tx: {}", e))?;
-                let mut tx: serde_json::Value = serde_json::from_str(&content)
-                    .map_err(|e| format!("Failed to parse tx: {}", e))?;
-                let path_str = path.to_string_lossy().to_string();
-                tx["id"] = serde_json::json!(path_str);
-                tx["path"] = serde_json::json!(path_str);
-                tx["display_id"] = serde_json::json!(id_counter.to_string());
-                transactions.push(tx);
-                id_counter += 1;
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
             }
+            // FIX #5: resolve symlinks and verify the real path is inside pending_dir
+            let canonical_path = match path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => continue, // skip unresolvable entries (dangling symlinks)
+            };
+            if !canonical_path.starts_with(&canonical_pending) {
+                continue; // path traversal attempt — skip silently
+            }
+            let content = fs::read_to_string(&canonical_path)
+                .map_err(|e| format!("Failed to read tx: {}", e))?;
+            let mut tx: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse tx: {}", e))?;
+            let path_str = path.to_string_lossy().to_string();
+            tx["id"] = serde_json::json!(path_str);
+            tx["path"] = serde_json::json!(path_str);
+            tx["display_id"] = serde_json::json!(id_counter.to_string());
+            transactions.push(tx);
+            id_counter += 1;
         }
     }
     Ok(transactions)
 }
 
+/// FIX #5: same canonicalize check for signed transactions.
 pub fn scan_signed_transactions(usb_path: &str) -> Result<Vec<serde_json::Value>, String> {
     let signed_dir = Path::new(usb_path).join("signed");
     if !signed_dir.exists() { return Ok(vec![]); }
+    let canonical_signed = signed_dir.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize signed dir: {}", e))?;
     let mut transactions = vec![];
     let mut id_counter = 1;
     if let Ok(entries) = fs::read_dir(&signed_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let content = fs::read_to_string(&path)
-                    .map_err(|e| format!("Failed to read tx: {}", e))?;
-                let mut tx: serde_json::Value = serde_json::from_str(&content)
-                    .map_err(|e| format!("Failed to parse tx: {}", e))?;
-                let path_str = path.to_string_lossy().to_string();
-                tx["id"] = serde_json::json!(path_str);
-                tx["path"] = serde_json::json!(path_str);
-                tx["display_id"] = serde_json::json!(id_counter.to_string());
-                transactions.push(tx);
-                id_counter += 1;
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
             }
+            // FIX #5: resolve symlinks and verify the real path is inside signed_dir
+            let canonical_path = match path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if !canonical_path.starts_with(&canonical_signed) {
+                continue;
+            }
+            let content = fs::read_to_string(&canonical_path)
+                .map_err(|e| format!("Failed to read tx: {}", e))?;
+            let mut tx: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse tx: {}", e))?;
+            let path_str = path.to_string_lossy().to_string();
+            tx["id"] = serde_json::json!(path_str);
+            tx["path"] = serde_json::json!(path_str);
+            tx["display_id"] = serde_json::json!(id_counter.to_string());
+            transactions.push(tx);
+            id_counter += 1;
         }
     }
     Ok(transactions)

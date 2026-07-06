@@ -7,6 +7,7 @@ use crate::transaction_cache::{Transaction, TransactionCache};
 use crate::validation;
 use bip39::{Mnemonic, Language};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UsbStatusResponse {
@@ -42,30 +43,28 @@ pub fn check_usb_status(state: State<AppState>) -> Result<UsbStatusResponse, Str
 
 #[tauri::command]
 pub fn initialize_wallet(password: String, state: State<AppState>) -> Result<String, String> {
-    // Validate password strength
     validation::validate_password_strength(&password)?;
 
     let mut wallet = state.wallet.lock().map_err(|e| e.to_string())?;
 
-    // Generate mnemonic (24 words = 256 bits of entropy)
+    // FIX #3: use OsRng for entropy generation
     let mut entropy = [0u8; 32];
     use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut entropy);
+    use rand::rngs::OsRng;
+    OsRng.fill_bytes(&mut entropy);
     let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
         .map_err(|e| format!("Failed to generate mnemonic: {}", e))?;
-    let mnemonic_phrase = mnemonic.to_string();
+    let mnemonic_phrase = Zeroizing::new(mnemonic.to_string());
 
-    // Derive key and address from mnemonic
     let address = crate::crypto::derive_address_from_mnemonic(&mnemonic_phrase, &password)?;
 
     wallet.address = Some(address.clone());
-    wallet.mnemonic = Some(mnemonic_phrase);
+    wallet.mnemonic = Some(mnemonic_phrase.clone());
     wallet.is_initialized = true;
     wallet.is_locked = false;
 
-    // Save encrypted vault to USB
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
-        crate::crypto::save_vault(&usb_path, &wallet.mnemonic.as_ref().unwrap(), &password)?;
+        crate::crypto::save_vault(&usb_path, &mnemonic_phrase, &password)?;
     }
 
     Ok(address)
@@ -73,27 +72,24 @@ pub fn initialize_wallet(password: String, state: State<AppState>) -> Result<Str
 
 #[tauri::command]
 pub fn import_from_mnemonic(mnemonic: String, password: String, state: State<AppState>) -> Result<String, String> {
-    // Validate mnemonic and password
     validation::validate_mnemonic(&mnemonic)?;
     validation::validate_password_strength(&password)?;
 
     let mut wallet = state.wallet.lock().map_err(|e| e.to_string())?;
 
-    // Validate mnemonic with BIP39
     let _ = Mnemonic::parse_in_normalized(Language::English, &mnemonic)
         .map_err(|_| "Invalid mnemonic phrase")?;
 
-    // Derive address
     let address = crate::crypto::derive_address_from_mnemonic(&mnemonic, &password)?;
+    let mnemonic_secure = Zeroizing::new(mnemonic);
 
     wallet.address = Some(address.clone());
-    wallet.mnemonic = Some(mnemonic);
+    wallet.mnemonic = Some(mnemonic_secure.clone());
     wallet.is_initialized = true;
     wallet.is_locked = false;
 
-    // Save encrypted vault to USB
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
-        crate::crypto::save_vault(&usb_path, &wallet.mnemonic.as_ref().unwrap(), &password)?;
+        crate::crypto::save_vault(&usb_path, &mnemonic_secure, &password)?;
     }
 
     Ok(address)
@@ -103,9 +99,9 @@ pub fn import_from_mnemonic(mnemonic: String, password: String, state: State<App
 pub fn unlock_wallet(password: String, state: State<AppState>) -> Result<String, String> {
     let mut wallet = state.wallet.lock().map_err(|e| e.to_string())?;
     
-    // Load vault from USB
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
-        let mnemonic = crate::crypto::load_vault(&usb_path, &password)?;
+        let mnemonic_raw = crate::crypto::load_vault(&usb_path, &password)?;
+        let mnemonic = Zeroizing::new(mnemonic_raw);
         let address = crate::crypto::derive_address_from_mnemonic(&mnemonic, &password)?;
         
         wallet.address = Some(address.clone());
@@ -164,10 +160,8 @@ pub fn create_unsigned_transaction(
         return Err("Wallet is locked".to_string());
     }
     
-    // Create unsigned transaction
     let tx = crate::crypto::create_unsigned_transaction(&to, &amount, &gas_settings, nonce)?;
     
-    // Save to USB pending folder
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
         let tx_path = crate::usb::save_pending_transaction(&usb_path, &tx)?;
         Ok(tx_path)
@@ -205,11 +199,9 @@ pub fn sign_transaction(tx: serde_json::Value, state: State<AppState>) -> Result
     let mnemonic = wallet.mnemonic.as_ref().unwrap();
     let signed_tx = crate::crypto::sign_transaction(&tx, mnemonic)?;
     
-    // Save to USB signed folder
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
         let tx_path = crate::usb::save_signed_transaction(&usb_path, &signed_tx)?;
         
-        // Delete from pending
         if let Some(tx_id) = tx.get("id").and_then(|v| v.as_str()) {
             crate::usb::delete_pending_transaction(&usb_path, tx_id)?;
         }
@@ -225,7 +217,6 @@ pub async fn broadcast_transaction(raw_tx: String, state: State<'_, AppState>) -
     let rpc_url = state.current_network.lock().map_err(|e| e.to_string())?.rpc_url.clone();
     let receipt = crate::network::broadcast_transaction(&rpc_url, &raw_tx).await?;
 
-    // Delete the corresponding signed transaction file from USB
     if let Some(usb_path) = state.usb_path.lock().ok().and_then(|p| p.clone()) {
         let signed_dir = std::path::Path::new(&usb_path).join("signed");
         if signed_dir.exists() {
@@ -235,7 +226,6 @@ pub async fn broadcast_transaction(raw_tx: String, state: State<'_, AppState>) -
                     if path.extension().and_then(|e| e.to_str()) == Some("json") {
                         if let Ok(content) = std::fs::read_to_string(&path) {
                             if let Ok(tx_json) = serde_json::from_str::<serde_json::Value>(&content) {
-                                // Match by raw_tx field or by hash
                                 let matches = tx_json.get("raw")
                                     .and_then(|v| v.as_str())
                                     .map(|r| r == raw_tx)
@@ -273,7 +263,7 @@ pub fn get_mnemonic(state: State<AppState>) -> Result<String, String> {
         return Err("Wallet is locked".to_string());
     }
 
-    Ok(wallet.mnemonic.clone().unwrap_or_default())
+    Ok(wallet.mnemonic.as_deref().map(|s| s.to_string()).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -298,8 +288,6 @@ pub fn switch_network(network_id: String, state: State<AppState>) -> Result<Netw
     Ok(network)
 }
 
-// Address Book Commands
-
 #[tauri::command]
 pub fn add_contact(
     name: String,
@@ -307,7 +295,6 @@ pub fn add_contact(
     note: Option<String>,
     state: State<AppState>,
 ) -> Result<Contact, String> {
-    // Validate inputs
     let sanitized_name = validation::sanitize_contact_name(&name)?;
     let validated_address = validation::validate_ethereum_address(&address)?;
 
@@ -341,7 +328,6 @@ pub fn update_contact(
     note: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
-    // Validate inputs
     let sanitized_name = validation::sanitize_contact_name(&name)?;
     let validated_address = validation::validate_ethereum_address(&address)?;
 
@@ -397,8 +383,6 @@ pub fn search_contacts(query: String, state: State<AppState>) -> Result<Vec<Cont
     Ok(book.search_contacts(&query))
 }
 
-// Transaction Cache Commands
-
 #[tauri::command]
 pub async fn get_cached_transactions(
     address: String,
@@ -417,11 +401,10 @@ pub async fn get_cached_transactions(
 
     let should_refresh = force_refresh ||
         cache_map.get(&cache_key)
-            .map(|c| c.is_stale(300)) // 5 minutes
+            .map(|c| c.is_stale(300))
             .unwrap_or(true);
 
     if should_refresh {
-        // Fetch fresh data
         let tx_history = crate::network::get_transaction_history(&network.rpc_url, &address).await?;
 
         let transactions: Vec<Transaction> = tx_history.iter().map(|tx| {

@@ -1,18 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use zeroize::Zeroizing;
 use crate::networks::Network;
 
 /// Wallet runtime state.
-/// NOTE: mnemonic is NOT stored here — it is only held transiently during unlock
-/// and passed directly to crypto functions. Storing it in RAM long-term is a
-/// security risk (process memory dumps).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// NOTE: mnemonic is NOT stored here long-term — it is held transiently during
+/// unlock and passed directly to crypto functions.
+/// Wrapped in Zeroizing<String> so memory is securely wiped on drop.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WalletState {
     pub address: Option<String>,
     /// Mnemonic kept only while wallet is unlocked.
     /// Set to None when wallet is locked via lock_wallet command.
+    /// Zeroizing<String> guarantees the memory is zeroed before dealloc,
+    /// preventing dead-store-elimination that plagues manual memset approaches.
     #[serde(skip)]
-    pub mnemonic: Option<String>,
+    pub mnemonic: Option<Zeroizing<String>>,
     pub is_initialized: bool,
     pub is_locked: bool,
     pub nonce: u64,
@@ -31,18 +34,10 @@ impl Default for WalletState {
 }
 
 impl WalletState {
-    /// Clear sensitive data from memory when locking the wallet.
+    /// Securely clear sensitive data from memory when locking the wallet.
+    /// Zeroizing<String> handles zeroing automatically on drop.
     pub fn lock(&mut self) {
-        if let Some(ref mut m) = self.mnemonic {
-            // Overwrite mnemonic bytes before dropping
-            unsafe {
-                let bytes = m.as_bytes_mut();
-                for b in bytes.iter_mut() {
-                    *b = 0;
-                }
-            }
-        }
-        self.mnemonic = None;
+        self.mnemonic = None; // Zeroizing<String> zeroes memory on drop
         self.is_locked = true;
     }
 }
