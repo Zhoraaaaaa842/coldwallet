@@ -1,6 +1,17 @@
 use regex::Regex;
+use tiny_keccak::{Hasher, Keccak};
 
-/// Validates Ethereum address format and checksum
+/// Keccak-256 used for EIP-55 checksum verification
+fn keccak256(data: &[u8]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    let mut out = [0u8; 32];
+    k.update(data);
+    k.finalize(&mut out);
+    out
+}
+
+/// Validates Ethereum address format and verifies EIP-55 mixed-case checksum
+/// if the input contains uppercase letters. Returns lowercase normalized address.
 pub fn validate_ethereum_address(address: &str) -> Result<String, String> {
     let address = address.trim();
 
@@ -17,28 +28,74 @@ pub fn validate_ethereum_address(address: &str) -> Result<String, String> {
         return Err("Address contains invalid characters".to_string());
     }
 
-    // Return lowercase normalized address
-    Ok(address.to_lowercase())
+    // EIP-55: if the address contains any uppercase letter, verify the checksum.
+    // All-lowercase and all-uppercase addresses are accepted without checksum check
+    // (common when copy-pasting from block explorers).
+    let has_upper = hex_part.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = hex_part.chars().any(|c| c.is_ascii_lowercase());
+    if has_upper && has_lower {
+        // Mixed case → must be a valid EIP-55 checksum address
+        let lower = hex_part.to_lowercase();
+        let hash = keccak256(lower.as_bytes());
+        let expected: String = lower.chars().enumerate().map(|(i, c)| {
+            if c.is_ascii_digit() {
+                c
+            } else {
+                // nibble i of hash: byte i/2, high nibble if i even, low if odd
+                let byte = hash[i / 2];
+                let nibble = if i % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                if nibble >= 8 { c.to_ascii_uppercase() } else { c }
+            }
+        }).collect();
+        if hex_part != expected {
+            return Err(format!(
+                "Invalid EIP-55 checksum. Expected: 0x{}", expected
+            ));
+        }
+    }
+
+    Ok(format!("0x{}", hex_part.to_lowercase()))
 }
 
-/// Validates transaction amount
-pub fn validate_transaction_amount(amount: &str) -> Result<f64, String> {
-    let value = amount.trim().parse::<f64>()
-        .map_err(|_| "Invalid amount format".to_string())?;
+/// Validates transaction amount as a decimal string without float precision loss.
+/// Accepts values like "0.001", "1", "1.5".
+pub fn validate_transaction_amount(amount: &str) -> Result<String, String> {
+    let amount = amount.trim();
 
-    if value <= 0.0 {
-        return Err("Amount must be positive".to_string());
+    if amount.is_empty() {
+        return Err("Amount cannot be empty".to_string());
     }
 
-    if !value.is_finite() {
-        return Err("Amount must be a finite number".to_string());
+    // Must be digits with optional single dot
+    let dot_count = amount.chars().filter(|&c| c == '.').count();
+    if dot_count > 1 {
+        return Err("Invalid amount format: multiple decimal points".to_string());
+    }
+    if !amount.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Err("Amount must contain only digits and a decimal point".to_string());
     }
 
-    if value > 1_000_000.0 {
+    let (int_part, frac_part) = if let Some(pos) = amount.find('.') {
+        (&amount[..pos], &amount[pos + 1..])
+    } else {
+        (amount, "")
+    };
+
+    // Parse integer part to check it's non-zero or frac is non-zero
+    let int_val: u128 = int_part.parse::<u128>()
+        .map_err(|_| "Invalid integer part of amount".to_string())?;
+
+    let frac_nonzero = frac_part.chars().any(|c| c != '0');
+    if int_val == 0 && !frac_nonzero {
+        return Err("Amount must be greater than zero".to_string());
+    }
+
+    // Sanity cap: 1,000,000 ETH
+    if int_val > 1_000_000 {
         return Err("Amount exceeds maximum limit (1,000,000 ETH)".to_string());
     }
 
-    Ok(value)
+    Ok(amount.to_string())
 }
 
 /// Sanitizes contact name
@@ -53,7 +110,6 @@ pub fn sanitize_contact_name(name: &str) -> Result<String, String> {
         return Err("Name must be 100 characters or less".to_string());
     }
 
-    // Remove control characters and normalize whitespace
     let sanitized: String = name.chars()
         .filter(|c| !c.is_control())
         .collect::<String>()
@@ -92,12 +148,10 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
         return Err("Password must contain at least 3 of: lowercase, uppercase, digits, special characters".to_string());
     }
 
-    // Check for common weak passwords
     let weak_passwords = [
         "password", "123456", "qwerty", "admin", "letmein",
         "welcome", "monkey", "dragon", "master", "sunshine"
     ];
-
     let password_lower = password.to_lowercase();
     for weak in &weak_passwords {
         if password_lower.contains(weak) {
@@ -108,7 +162,11 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validates mnemonic phrase
+/// Validates BIP-39 mnemonic phrase.
+/// NOTE: duplicate words are intentionally allowed — BIP-39 word list has 2048
+/// words and a statistically valid mnemonic can repeat words. The cryptographic
+/// checksum (last word encodes entropy checksum bits) is verified by bip39::Mnemonic
+/// in commands.rs, not here.
 pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String> {
     let words: Vec<&str> = mnemonic.trim().split_whitespace().collect();
 
@@ -117,19 +175,12 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String> {
         return Err(format!("Mnemonic must be 12, 15, 18, 21, or 24 words (got {})", words.len()));
     }
 
-    // Check for non-ASCII characters
     if !mnemonic.is_ascii() {
         return Err("Mnemonic must contain only ASCII characters".to_string());
     }
 
-    // Check for duplicate words (potential typo or manipulation)
-    let mut unique_words = words.clone();
-    unique_words.sort();
-    unique_words.dedup();
-    if unique_words.len() != words.len() {
-        return Err("Mnemonic contains duplicate words".to_string());
-    }
-
+    // Do NOT check for duplicate words here — BIP-39 mnemonics can legitimately
+    // repeat words. The actual checksum is validated by bip39::Mnemonic::parse.
     Ok(())
 }
 
@@ -169,7 +220,6 @@ pub fn sanitize_file_path(path: &str) -> Result<String, String> {
         return Err("Path contains null bytes".to_string());
     }
 
-    // Remove any control characters
     let sanitized: String = path.chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\r')
         .collect();
@@ -187,7 +237,6 @@ pub fn validate_rpc_url(url: &str) -> Result<(), String> {
         return Err("RPC URL is too long".to_string());
     }
 
-    // Basic URL validation
     let url_regex = Regex::new(r"^https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=]+$")
         .map_err(|_| "Invalid regex".to_string())?;
 
@@ -203,10 +252,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_ethereum_address() {
-        assert!(validate_ethereum_address("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb").is_ok());
+    fn test_validate_ethereum_address_lowercase() {
+        // All-lowercase: no checksum check, always accepted
+        assert!(validate_ethereum_address("0x742d35cc6634c0532925a3b844bc9e7595f0beb4").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ethereum_address_eip55_valid() {
+        // Valid EIP-55 checksummed address
+        assert!(validate_ethereum_address("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ethereum_address_eip55_invalid() {
+        // Same address with wrong checksum (flip one char case)
+        assert!(validate_ethereum_address("0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed").is_err());
+    }
+
+    #[test]
+    fn test_validate_ethereum_address_invalid() {
         assert!(validate_ethereum_address("0xinvalid").is_err());
-        assert!(validate_ethereum_address("742d35Cc6634C0532925a3b844Bc9e7595f0bEb").is_err());
+        assert!(validate_ethereum_address("742d35cc").is_err());
     }
 
     #[test]
@@ -219,8 +285,18 @@ mod tests {
     #[test]
     fn test_validate_transaction_amount() {
         assert!(validate_transaction_amount("1.5").is_ok());
+        assert!(validate_transaction_amount("0.000000000000000001").is_ok()); // 1 wei
         assert!(validate_transaction_amount("0").is_err());
+        assert!(validate_transaction_amount("0.0").is_err());
         assert!(validate_transaction_amount("-1").is_err());
         assert!(validate_transaction_amount("2000000").is_err());
+    }
+
+    #[test]
+    fn test_validate_mnemonic_allows_repeated_words() {
+        // 12 words with a repeat — must NOT be rejected by this function
+        // (BIP-39 checksum validation happens in bip39::Mnemonic::parse)
+        let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert!(validate_mnemonic(m).is_ok());
     }
 }
