@@ -1,71 +1,40 @@
-# Исправления для ZhoraWallet
+# Changelog — ZhoraWallet
 
-## Описание проблемы
-1. При отсутствии флешки приложение показывало, что она подключена
-2. Отсутствовало предупреждение о необходимости форматирования флешки
-3. Не отображалась надпись "Вставьте флешку" когда USB не подключен
+---
 
-## Внесенные исправления
+## [V0.0.2] — 2026-07-06
 
-### 1. Исправлена проверка USB на Windows (usb.rs)
-**Проблема:** Функция `detect_usb_drive()` проверяла только существование дисков (D:\, E:\, и т.д.), но не проверяла, являются ли они съёмными (USB). Поэтому локальные диски ошибочно определялись как USB.
+### 🐛 Исправления
 
-**Решение:** 
-- Добавлена функция `is_removable_drive()` которая использует Windows API `GetDriveTypeW()` для проверки типа диска
-- Теперь только съёмные диски (DRIVE_REMOVABLE = 2) определяются как USB
-- Добавлена зависимость `winapi` в Cargo.toml
+#### 🔌 USB-детекция (`usb.rs`)
+- **Фикс:** при отсутствии флешки приложение ошибочно показывало что USB подключён
+- Добавлена `is_removable_drive()` — использует Windows API `GetDriveTypeW()`, теперь определяются только съёмные носители (`DRIVE_REMOVABLE = 2`)
+- Добавлена `check_usb_detailed()` со структурой `UsbStatus { path, has_vault, needs_format }`
+- Добавлена зависимость `winapi` в `Cargo.toml`
 
-### 2. Добавлена проверка наличия wallet.vault (usb.rs)
-**Проблема:** Приложение не проверяло наличие файла wallet.vault на флешке и не предупреждало о необходимости форматирования.
+#### 🖼️ UI предупреждений
+- **`Dashboard.vue`** — текст "USB Disconnected" → "Вставьте флешку"; добавлены блоки "⚠ Требуется форматирование USB" и "✓ Wallet.vault найден"
+- **`TitleBar.vue`** — текст "USB Disconnected" → "Вставьте флешку"
+- **`Settings.vue`** — "УСБ не обнаружен" → "Вставьте флешку"; добавлены информативные блоки статуса USB
 
-**Решение:**
-- Добавлена структура `UsbStatus` с полями:
-  - `path` - путь к USB накопителю
-  - `has_vault` - наличие файла wallet.vault
-  - `needs_format` - необходимость подготовки флешки
-- Добавлена функция `check_usb_detailed()` которая возвращает полный статус USB
+#### 💻 TypeScript (`wallet.ts`)
+- Добавлены реактивные переменные: `usbPath`, `usbHasVault`, `usbNeedsFormat`
+- Обновлена `checkUsbStatus()` — обработка расширенного статуса USB
 
-### 3. Обновлен UI для отображения предупреждений
+### 📄 Измененные файлы
+1. `zhorawallet-tauri/src-tauri/src/usb.rs`
+2. `zhorawallet-tauri/src-tauri/src/commands.rs`
+3. `zhorawallet-tauri/src-tauri/Cargo.toml`
+4. `zhorawallet-tauri/src/stores/wallet.ts`
+5. `zhorawallet-tauri/src/views/Dashboard.vue`
+6. `zhorawallet-tauri/src/views/Settings.vue`
+7. `zhorawallet-tauri/src/components/TitleBar.vue`
 
-#### Dashboard.vue
-- Изменен текст "USB Disconnected" на "Вставьте флешку"
-- Добавлены предупреждения:
-  - "⚠ Требуется форматирование USB" когда флешка подключена, но нет wallet.vault
-  - "✓ Wallet.vault найден" когда флешка готова к работе
+---
 
-#### TitleBar.vue  
-- Изменен текст "USB Disconnected" на "Вставьте флешку"
+## [V0.0.1] — 2026-04-11
 
-#### Settings.vue
-- Изменен текст "USB не обнаружен" на "Вставьте флешку"
-- Добавлены информативные блоки:
-  - Предупреждение о необходимости подготовки USB
-  - Подтверждение что USB готова к работе
-
-### 4. Обновлен TypeScript код (wallet.ts)
-- Добавлены реактивные переменные:
-  - `usbPath` - путь к USB
-  - `usbHasVault` - наличие wallet.vault
-  - `usbNeedsFormat` - необходимость форматирования
-- Обновлена функция `checkUsbStatus()` для обработки расширенного статуса USB
-
-## Файлы изменены
-1. `zhorawallet-tauri/src-tauri/src/usb.rs` - логика проверки USB
-2. `zhorawallet-tauri/src-tauri/src/commands.rs` - Tauri команда
-3. `zhorawallet-tauri/src-tauri/Cargo.toml` - добавлена зависимость winapi
-4. `zhorawallet-tauri/src/stores/wallet.ts` - состояние USB
-5. `zhorawallet-tauri/src/views/Dashboard.vue` - UI предупреждения
-6. `zhorawallet-tauri/src/views/Settings.vue` - UI предупреждения  
-7. `zhorawallet-tauri/src/components/TitleBar.vue` - текст статуса
-
-## Как собрать проект
-```bash
-cd zhorawallet-tauri
-npm install
-npm run tauri build
-```
-
-## Тестирование
-1. Запустите приложение без флешки - должно отображаться "Вставьте флешку"
-2. Вставьте обычную флешку (не с wallet.vault) - должно появиться предупреждение о форматировании
-3. Вставьте флешку с wallet.vault - должно отображаться "Wallet.vault найден"
+- Первый релиз: базовая air-gapped архитектура
+- Tauri 2.0 + Vue 3 + Rust
+- BIP-39 (24 слова), AES-256-GCM, EIP-1559
+- USB-перенос `pending/` и `signed/` транзакций
